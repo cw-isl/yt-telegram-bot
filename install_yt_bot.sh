@@ -277,13 +277,21 @@ getv() {
   ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
 }
 
+# ===== PATCH: robust setter (atomic awk replace-or-append). No re-escaping here
+# because menu already escapes quotes/backslashes before calling setv.
 setv() {
   local key="$1" val="$2"
-  if grep -q "^${key}=" "$ENV_FILE"; then
-    sudo sed -i "s|^${key}=.*|${key}=\"${val}\"|" "$ENV_FILE"
-  else
-    echo "${key}=\"${val}\"" | sudo tee -a "$ENV_FILE" >/dev/null
-  fi
+
+  # Atomic update via awk: replace the KEY=... line; append if not present.
+  sudo awk -v k="$key" -v v="$val" '
+    BEGIN { updated=0 }
+    $0 ~ "^" k "=" { print k "=\"" v "\""; updated=1; next }
+    { print }
+    END { if (updated==0) print k "=\"" v "\"" }
+  ' "$ENV_FILE" | sudo tee "$ENV_FILE.tmp" >/dev/null
+
+  sudo mv "$ENV_FILE.tmp" "$ENV_FILE"
+  sudo chmod 600 "$ENV_FILE"
 }
 
 print_settings() {
