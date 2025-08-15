@@ -3,11 +3,12 @@ set -euo pipefail
 
 # ==============================
 # All-in-one installer for youtube_recorder_bot.py
-# - Pre-checks (3 questions)
-# - apt/pip/rclone
-# - env file
+# - Pre-checks (4 questions)
+# - apt/rclone
+# - venv + pip install
+# - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
-# - systemd unit
+# - systemd unit (uses venv python)
 # - admin CLI (yt-botctl)
 # ==============================
 
@@ -37,6 +38,16 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# escape a single line for safe ENV file saving
+escape_line() {
+  python3 - <<'PY'
+import sys
+s = sys.stdin.read().rstrip('\n')
+s = s.replace('\\', '\\\\').replace('"', '\\"')
+print(s)
+PY
+}
+
 ensure_root
 
 # ------------------------------------------------------------------------------
@@ -46,13 +57,14 @@ say "=== Pre-checks ==="
 ask_yn "Did you create a Telegram bot token?" || { echo "See: $NOTICE_URL"; exit 1; }
 ask_yn "Do you have your OneDrive rclone JSON ready?" || { echo "See: $NOTICE_URL"; exit 1; }
 ask_yn "Do you understand that this setup uses rclone for OneDrive only?" || { echo "See: $NOTICE_URL"; exit 1; }
+ask_yn "Do you already have a Gemini API key?" || { echo "See: $NOTICE_URL"; exit 1; }
 
 # ------------------------------------------------------------------------------
 # 1) Basic dependencies
 # ------------------------------------------------------------------------------
 say "=== Installing dependencies ==="
 apt-get update -y
-apt-get install -y python3 python3-pip ffmpeg curl jq
+apt-get install -y python3 python3-pip python3-venv ffmpeg curl jq
 
 if ! require_cmd rclone; then
   say "Installing rclone..."
@@ -85,21 +97,29 @@ chmod 700 /etc/yt-bot
 chmod 644 /var/log/yt-bot/bot.log
 
 # ------------------------------------------------------------------------------
-# 3) Python libs
+# 3) Python venv + libs  (PATCH: venv 도입)
 # ------------------------------------------------------------------------------
-say "=== Python libs ==="
-pip3 install --upgrade pip
-pip3 install pyTelegramBotAPI yt-dlp faster-whisper google-generativeai
+say "=== Python venv & libs (inside venv) ==="
+VENV_DIR="/opt/yt-bot/.venv"
+VPY="$VENV_DIR/bin/python"
+VPIP="$VENV_DIR/bin/pip"
+
+if [ ! -x "$VPY" ]; then
+  python3 -m venv "$VENV_DIR"
+fi
+"$VPIP" install --upgrade pip
+# 최소 의존성 설치 (requirements.txt가 없다면)
+"$VPIP" install pyTelegramBotAPI yt-dlp faster-whisper google-generativeai
 
 # ------------------------------------------------------------------------------
-# 4) Environment values (saved to /etc/yt-bot/yt-bot.env)
+# 4) Environment values (saved to /etc/yt-bot/yt-bot.env)  (PATCH: 이스케이프 + LANG)
 # ------------------------------------------------------------------------------
 say "=== Environment ==="
 ENV_FILE="/etc/yt-bot/yt-bot.env"
 
-read -r -p "BOT_TOKEN: " BOT_TOKEN
-if [ -z "$BOT_TOKEN" ]; then err "BOT_TOKEN is required."; exit 1; fi
-read -r -p "GEMINI_API_KEY (optional, Enter to skip): " GEMINI_API_KEY || true
+read -r -p "BOT_TOKEN: " RAW_BOT_TOKEN
+if [ -z "$RAW_BOT_TOKEN" ]; then err "BOT_TOKEN is required."; exit 1; fi
+read -r -p "GEMINI_API_KEY (optional, Enter to skip): " RAW_GEMINI || true
 read -r -p "RCLONE_REMOTE [default: onedrive]: " RCLONE_REMOTE || true
 RCLONE_REMOTE="${RCLONE_REMOTE:-onedrive}"
 read -r -p "RCLONE_FOLDER_VIDEOS [default: YouTube_Backup]: " RCLONE_FOLDER_VIDEOS || true
@@ -107,15 +127,22 @@ RCLONE_FOLDER_VIDEOS="${RCLONE_FOLDER_VIDEOS:-YouTube_Backup}"
 read -r -p "RCLONE_FOLDER_TRANSCRIPTS [default: YouTube_Backup/Transcripts]: " RCLONE_FOLDER_TRANSCRIPTS || true
 RCLONE_FOLDER_TRANSCRIPTS="${RCLONE_FOLDER_TRANSCRIPTS:-YouTube_Backup/Transcripts}"
 
+# escape & quote
+BOT_TOKEN="$(printf "%s" "$RAW_BOT_TOKEN" | escape_line)"
+GEMINI_API_KEY="$(printf "%s" "${RAW_GEMINI:-}" | escape_line)"
+BOT_HOME_ESC="$(printf "%s" "$BOT_HOME" | escape_line)"
+
 cat > "$ENV_FILE" <<EOF
-BOT_TOKEN=$BOT_TOKEN
-GEMINI_API_KEY=$GEMINI_API_KEY
-RCLONE_REMOTE=$RCLONE_REMOTE
-RCLONE_FOLDER_VIDEOS=$RCLONE_FOLDER_VIDEOS
-RCLONE_FOLDER_TRANSCRIPTS=$RCLONE_FOLDER_TRANSCRIPTS
-BOT_HOME=$BOT_HOME
-WHISPER_MODEL=small
-WHISPER_DEVICE=auto
+BOT_TOKEN="${BOT_TOKEN}"
+GEMINI_API_KEY="${GEMINI_API_KEY}"
+RCLONE_REMOTE="${RCLONE_REMOTE}"
+RCLONE_FOLDER_VIDEOS="${RCLONE_FOLDER_VIDEOS}"
+RCLONE_FOLDER_TRANSCRIPTS="${RCLONE_FOLDER_TRANSCRIPTS}"
+BOT_HOME="${BOT_HOME_ESC}"
+WHISPER_MODEL="small"
+WHISPER_DEVICE="auto"
+LANG="C.UTF-8"
+LC_ALL="C.UTF-8"
 EOF
 chmod 600 "$ENV_FILE"
 
@@ -138,8 +165,6 @@ rclone mkdir "${RCLONE_REMOTE}:/${RCLONE_FOLDER_TRANSCRIPTS}" || true
 # 6) Fetch bot code (from GitHub Raw or local path)
 # ------------------------------------------------------------------------------
 say "=== Fetch bot code ==="
-# Try to auto-guess a default Raw URL from this script's common pattern
-# (Edit <YOUR_GH_USER>/<YOUR_REPO>/<BRANCH> if desired)
 DEFAULT_BOT_CODE_URL="https://raw.githubusercontent.com/<YOUR_GH_USER>/<YOUR_REPO>/main/youtube_recorder_bot.py"
 read -r -p "Bot code Raw URL [default: $DEFAULT_BOT_CODE_URL] (leave blank to provide a local path): " BOT_CODE_URL || true
 
@@ -160,7 +185,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 7) systemd unit
+# 7) systemd unit  (PATCH: ExecStart에 venv 파이썬 사용)
 # ------------------------------------------------------------------------------
 say "=== systemd unit ==="
 UNIT=/etc/systemd/system/youtube_bot.service
@@ -175,7 +200,7 @@ User=$TARGET_USER
 Group=$TARGET_USER
 WorkingDirectory=$BOT_HOME
 EnvironmentFile=$ENV_FILE
-ExecStart=/usr/bin/python3 /opt/yt-bot/youtube_recorder_bot.py
+ExecStart=$VENV_DIR/bin/python /opt/yt-bot/youtube_recorder_bot.py
 Restart=always
 RestartSec=5
 StandardOutput=append:/var/log/yt-bot/bot.log
@@ -189,7 +214,7 @@ systemctl daemon-reload
 systemctl enable --now youtube_bot
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl)
+# 8) Admin CLI (yt-botctl)  (원본 유지)
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
@@ -244,8 +269,8 @@ EOM
       4) key="RCLONE_FOLDER_VIDEOS" ;;
       5) key="RCLONE_FOLDER_TRANSCRIPTS" ;;
       6) key="BOT_HOME" ;;
-      7) key="WHISPER_MODEL" ;;
-      8) key="WHISPER_DEVICE" ;;
+      7) WHISPER_MODEL ;;
+      8) WHISPER_DEVICE ;;
       9) break ;;
       *) continue ;;
     esac
