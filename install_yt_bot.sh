@@ -116,8 +116,7 @@ fi
 say "=== Environment ==="
 ENV_FILE="/etc/yt-bot/yt-bot.env"
 
-read -r -p "BOT_TOKEN: " RAW_BOT_TOKEN
-if [ -z "$RAW_BOT_TOKEN" ]; then err "BOT_TOKEN is required."; exit 1; fi
+read -r -p "BOT_TOKEN (optional, press Enter to skip): " RAW_BOT_TOKEN || true
 read -r -p "GEMINI_API_KEY (optional, Enter to skip): " RAW_GEMINI || true
 read -r -p "RCLONE_REMOTE [default: onedrive]: " RCLONE_REMOTE || true
 RCLONE_REMOTE="${RCLONE_REMOTE:-onedrive}"
@@ -127,13 +126,13 @@ read -r -p "RCLONE_FOLDER_TRANSCRIPTS [default: YouTube_Backup/Transcripts]: " R
 RCLONE_FOLDER_TRANSCRIPTS="${RCLONE_FOLDER_TRANSCRIPTS:-YouTube_Backup/Transcripts}"
 
 # escape & quote
-BOT_TOKEN="$(printf "%s" "$RAW_BOT_TOKEN" | escape_line)"
-GEMINI_API_KEY="$(printf "%s" "${RAW_GEMINI:-}" | escape_line)"
+BOT_TOKEN_ESC="$(printf "%s" "${RAW_BOT_TOKEN:-}" | escape_line)"
+GEMINI_API_KEY_ESC="$(printf "%s" "${RAW_GEMINI:-}" | escape_line)"
 BOT_HOME_ESC="$(printf "%s" "$BOT_HOME" | escape_line)"
 
 cat > "$ENV_FILE" <<EOF
-BOT_TOKEN="${BOT_TOKEN}"
-GEMINI_API_KEY="${GEMINI_API_KEY}"
+BOT_TOKEN="${BOT_TOKEN_ESC}"
+GEMINI_API_KEY="${GEMINI_API_KEY_ESC}"
 RCLONE_REMOTE="${RCLONE_REMOTE}"
 RCLONE_FOLDER_VIDEOS="${RCLONE_FOLDER_VIDEOS}"
 RCLONE_FOLDER_TRANSCRIPTS="${RCLONE_FOLDER_TRANSCRIPTS}"
@@ -144,6 +143,12 @@ LANG="C.UTF-8"
 LC_ALL="C.UTF-8"
 EOF
 chmod 600 "$ENV_FILE"
+
+if [ -z "${RAW_BOT_TOKEN:-}" ]; then
+  say "[WARN] BOT_TOKEN not set. You can configure it later via 'yt-botctl' → Settings."
+else
+  say "[OK] BOT_TOKEN provided."
+fi
 
 # ------------------------------------------------------------------------------
 # 5) rclone remote check
@@ -211,7 +216,15 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now youtube_bot
+
+# ▶ 핵심 변경: BOT_TOKEN이 비어있으면 enable만 하고 start는 보류
+if [ -z "${RAW_BOT_TOKEN:-}" ]; then
+  say "[INFO] BOT_TOKEN is empty → service will be installed but NOT started."
+  systemctl enable youtube_bot
+  say "Later, run:  yt-botctl   → Settings → set BOT_TOKEN  → Restart"
+else
+  systemctl enable --now youtube_bot
+fi
 
 # ------------------------------------------------------------------------------
 # 8) Admin CLI (yt-botctl) — menu editing + template auto-create
@@ -393,7 +406,7 @@ EOM
       1) menu_settings ;;
       2) menu_delete ;;
       3) sudo systemctl status "$UNIT" --no-pager ;;
-      4) restart_service; echo "Restarted." ;;
+      4) echo "Restarting..."; restart_service; echo "Restarted." ;;
       5) sudo journalctl -u "$UNIT" -f ;;
       6) break ;;
       *) ;;
@@ -447,4 +460,10 @@ echo "Recent logs:"
 journalctl -u youtube_bot -n 50 --no-pager || true
 
 say "Installation complete."
+if [ -z "${RAW_BOT_TOKEN:-}" ]; then
+  echo "Service installed but not started (BOT_TOKEN missing)."
+  echo "Run 'yt-botctl' → Settings to set BOT_TOKEN, then choose 'Restart'."
+else
+  echo "Service enabled and started."
+fi
 echo "Manage with: yt-botctl"
