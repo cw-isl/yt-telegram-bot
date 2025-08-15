@@ -9,7 +9,7 @@ set -euo pipefail
 # - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
 # - systemd unit (uses venv python)
-# - admin CLI (yt-botctl)
+# - admin CLI (yt-botctl, with menu editing & template auto-create)
 # ==============================
 
 NOTICE_URL="http://mmm.com"   # TODO: replace with real guide URL
@@ -97,7 +97,7 @@ chmod 700 /etc/yt-bot
 chmod 644 /var/log/yt-bot/bot.log
 
 # ------------------------------------------------------------------------------
-# 3) Python venv + libs  (PATCH: venv 도입)
+# 3) Python venv + libs
 # ------------------------------------------------------------------------------
 say "=== Python venv & libs (inside venv) ==="
 VENV_DIR="/opt/yt-bot/.venv"
@@ -108,11 +108,10 @@ if [ ! -x "$VPY" ]; then
   python3 -m venv "$VENV_DIR"
 fi
 "$VPIP" install --upgrade pip
-# 최소 의존성 설치 (requirements.txt가 없다면)
 "$VPIP" install pyTelegramBotAPI yt-dlp faster-whisper google-generativeai
 
 # ------------------------------------------------------------------------------
-# 4) Environment values (saved to /etc/yt-bot/yt-bot.env)  (PATCH: 이스케이프 + LANG)
+# 4) Environment values (saved to /etc/yt-bot/yt-bot.env)
 # ------------------------------------------------------------------------------
 say "=== Environment ==="
 ENV_FILE="/etc/yt-bot/yt-bot.env"
@@ -165,6 +164,7 @@ rclone mkdir "${RCLONE_REMOTE}:/${RCLONE_FOLDER_TRANSCRIPTS}" || true
 # 6) Fetch bot code (from GitHub Raw or local path)
 # ------------------------------------------------------------------------------
 say "=== Fetch bot code ==="
+# !!! Replace this with your real RAW URL
 DEFAULT_BOT_CODE_URL="https://raw.githubusercontent.com/<YOUR_GH_USER>/<YOUR_REPO>/main/youtube_recorder_bot.py"
 read -r -p "Bot code Raw URL [default: $DEFAULT_BOT_CODE_URL] (leave blank to provide a local path): " BOT_CODE_URL || true
 
@@ -185,7 +185,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 7) systemd unit  (PATCH: ExecStart에 venv 파이썬 사용)
+# 7) systemd unit (use venv python)
 # ------------------------------------------------------------------------------
 say "=== systemd unit ==="
 UNIT=/etc/systemd/system/youtube_bot.service
@@ -214,41 +214,111 @@ systemctl daemon-reload
 systemctl enable --now youtube_bot
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl)  (원본 유지)
+# 8) Admin CLI (yt-botctl) — menu editing + template auto-create
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="/etc/yt-bot/yt-bot.env"
+ENV_DIR="/etc/yt-bot"
+ENV_FILE="$ENV_DIR/yt-bot.env"
 UNIT="youtube_bot.service"
 
+ensure_env_file() {
+  sudo mkdir -p "$ENV_DIR"
+  if [ ! -f "$ENV_FILE" ]; then
+    sudo tee "$ENV_FILE" >/dev/null <<'EOT'
+# Telegram bot token (optional – set later via yt-botctl)
+BOT_TOKEN=""
+
+# Gemini API key (optional – set later via yt-botctl)
+GEMINI_API_KEY=""
+
+# Rclone settings
+RCLONE_REMOTE="onedrive"
+RCLONE_FOLDER_VIDEOS="YouTube_Backup"
+RCLONE_FOLDER_TRANSCRIPTS="YouTube_Backup/Transcripts"
+
+# Bot home directory
+BOT_HOME="/home/REPLACE_ME"
+
+# Whisper settings
+WHISPER_MODEL="small"
+WHISPER_DEVICE="auto"
+
+LANG="C.UTF-8"
+LC_ALL="C.UTF-8"
+EOT
+    sudo chmod 600 "$ENV_FILE"
+  fi
+}
+
 mask() {
-  local v="$1"
+  local v="${1:-}"
   if [ -z "$v" ]; then echo ""; return; fi
   local len=${#v}
   if [ $len -le 6 ]; then echo "******"; else echo "${v:0:3}****${v: -3}"; fi
 }
 
+getv() {
+  local key="$1"
+  ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
+}
+
+setv() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" "$ENV_FILE"; then
+    sudo sed -i "s|^${key}=.*|${key}=\"${val}\"|" "$ENV_FILE"
+  else
+    echo "${key}=\"${val}\"" | sudo tee -a "$ENV_FILE" >/dev/null
+  fi
+}
+
 print_settings() {
   echo "Current settings:"
-  if [ ! -f "$ENV_FILE" ]; then echo "Env file not found: $ENV_FILE"; return; fi
-  grep -E '^(BOT_TOKEN|GEMINI_API_KEY|RCLONE_REMOTE|RCLONE_FOLDER_VIDEOS|RCLONE_FOLDER_TRANSCRIPTS|BOT_HOME|WHISPER_MODEL|WHISPER_DEVICE)=' "$ENV_FILE" | while read -r line; do
-    key="${line%%=*}"
-    val="${line#*=}"
-    if [[ "$key" == "BOT_TOKEN" || "$key" == "GEMINI_API_KEY" ]]; then
-      val="$(mask "$val")"
-    fi
-    printf "  %-26s = %s\n" "$key" "$val"
-  done
+  local BT GK RR VF TF BH WM WD
+  BT="$(getv BOT_TOKEN)"
+  GK="$(getv GEMINI_API_KEY)"
+  RR="$(getv RCLONE_REMOTE)"
+  VF="$(getv RCLONE_FOLDER_VIDEOS)"
+  TF="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
+  BH="$(getv BOT_HOME)"
+  WM="$(getv WHISPER_MODEL)"
+  WD="$(getv WHISPER_DEVICE)"
+  printf "  %-26s = %s\n" "BOT_TOKEN"                 "$(mask "$BT")"
+  printf "  %-26s = %s\n" "GEMINI_API_KEY"            "$(mask "$GK")"
+  printf "  %-26s = %s\n" "RCLONE_REMOTE"             "${RR}"
+  printf "  %-26s = %s\n" "RCLONE_FOLDER_VIDEOS"      "${VF}"
+  printf "  %-26s = %s\n" "RCLONE_FOLDER_TRANSCRIPTS" "${TF}"
+  printf "  %-26s = %s\n" "BOT_HOME"                  "${BH}"
+  printf "  %-26s = %s\n" "WHISPER_MODEL"             "${WM}"
+  printf "  %-26s = %s\n" "WHISPER_DEVICE"            "${WD}"
+}
+
+restart_service() {
+  sudo systemctl daemon-reload
+  sudo systemctl restart "$UNIT"
+  sleep 1
+}
+
+ensure_remote_dirs() {
+  local remote folder_v folder_t
+  remote="$(getv RCLONE_REMOTE)"
+  folder_v="$(getv RCLONE_FOLDER_VIDEOS)"
+  folder_t="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
+  if [ -z "$remote" ]; then echo "RCLONE_REMOTE is empty."; return 1; fi
+  rclone mkdir "${remote}:/${folder_v}" || true
+  rclone mkdir "${remote}:/${folder_t}" || true
+  echo "Ensured: ${remote}:/${folder_v} and ${remote}:/${folder_t}"
 }
 
 menu_settings() {
+  ensure_env_file
   while true; do
     clear
     print_settings
-    cat <<EOM
+    cat <<'EOM'
 
 Edit which setting?
   1) BOT_TOKEN
@@ -259,7 +329,8 @@ Edit which setting?
   6) BOT_HOME
   7) WHISPER_MODEL
   8) WHISPER_DEVICE
-  9) Back
+  9) Ensure rclone remote folders
+  0) Back
 EOM
     read -r -p "> " sel
     case "$sel" in
@@ -269,43 +340,49 @@ EOM
       4) key="RCLONE_FOLDER_VIDEOS" ;;
       5) key="RCLONE_FOLDER_TRANSCRIPTS" ;;
       6) key="BOT_HOME" ;;
-      7) WHISPER_MODEL ;;
-      8) WHISPER_DEVICE ;;
-      9) break ;;
+      7) key="WHISPER_MODEL" ;;
+      8) key="WHISPER_DEVICE" ;;
+      9) ensure_remote_dirs; read -r -p "Press Enter to continue..." _; continue ;;
+      0) break ;;
       *) continue ;;
     esac
-    read -r -p "New value for $key: " val
-    if [ -n "$val" ]; then
-      sudo sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_FILE" || echo "${key}=${val}" | sudo tee -a "$ENV_FILE" >/dev/null
-      echo "Updated."
-      sudo systemctl restart "$UNIT"
-      sleep 1
-    fi
+    cur="$(getv "$key")"
+    echo "Current $key: ${cur}"
+    read -r -p "New value for $key (leave empty to cancel): " val
+    [ -z "${val}" ] && continue
+    val="$(printf "%s" "$val" | python3 - <<'PY'
+import sys
+s=sys.stdin.read().rstrip("\n")
+s=s.replace('\\','\\\\').replace('"','\\"')
+print(s)
+PY
+)"
+    setv "$key" "$val"
+    echo "Updated. Restarting service..."
+    restart_service
   done
 }
 
 menu_delete() {
-  echo "This will remove service, env, and code."
+  echo "This will remove service, env, and app files."
   read -r -p "Type 'delete' to confirm: " x
-  if [ "$x" != "delete" ]; then
-    echo "Canceled."
-    return
-  fi
-  systemctl disable --now "$UNIT" || true
-  rm -f /etc/systemd/system/"$UNIT"
-  systemctl daemon-reload || true
-  rm -f "$ENV_FILE"
-  rm -rf /opt/yt-bot
+  [ "$x" != "delete" ] && { echo "Canceled."; return; }
+  sudo systemctl disable --now "$UNIT" || true
+  sudo rm -f /etc/systemd/system/"$UNIT"
+  sudo systemctl daemon-reload || true
+  sudo rm -f "$ENV_FILE"
+  sudo rm -rf /opt/yt-bot
   echo "Removed."
 }
 
 menu_main() {
+  ensure_env_file
   while true; do
-    cat <<EOM
+    cat <<'EOM'
 
 yt-botctl menu:
-  1) Settings
-  2) Delete
+  1) Settings (edit & save)
+  2) Delete (uninstall)
   3) Status
   4) Restart
   5) Logs (follow)
@@ -315,9 +392,9 @@ EOM
     case "$sel" in
       1) menu_settings ;;
       2) menu_delete ;;
-      3) systemctl status youtube_bot --no-pager ;;
-      4) systemctl restart youtube_bot ;;
-      5) journalctl -u youtube_bot -f ;;
+      3) sudo systemctl status "$UNIT" --no-pager ;;
+      4) restart_service; echo "Restarted." ;;
+      5) sudo journalctl -u "$UNIT" -f ;;
       6) break ;;
       *) ;;
     esac
@@ -326,11 +403,11 @@ EOM
 
 case "${1:-}" in
   settings) menu_settings ;;
-  delete) menu_delete ;;
-  status) systemctl status youtube_bot --no-pager ;;
-  restart) systemctl restart youtube_bot ;;
-  logs) journalctl -u youtube_bot -f ;;
-  *) menu_main ;;
+  delete)   menu_delete   ;;
+  status)   sudo systemctl status "$UNIT" --no-pager ;;
+  restart)  restart_service ;;
+  logs)     sudo journalctl -u "$UNIT" -f ;;
+  *)        menu_main ;;
 esac
 EOF
 chmod 755 /usr/local/bin/yt-botctl
@@ -338,20 +415,20 @@ chmod 755 /usr/local/bin/yt-botctl
 # ------------------------------------------------------------------------------
 # 9) README (for reference on server)
 # ------------------------------------------------------------------------------
-cat > /opt/yt-bot/README.installed.md <<'EOF'
+cat > /opt/yt-bot/README.installed.md <<EOF
 # YouTube/Live Recorder Telegram Bot — Installed
 
 ## Telegram usage
 - Send any video/YouTube URL: download & upload only (no transcript/summary).
-- Live URL: starts recording; send `/stop` to finish and upload.
-- `smr [path]`: browse OneDrive → select a file → transcribe (Whisper) + summarize (Gemini, Korean) → upload.
+- Live URL: starts recording; send \`/stop\` to finish and upload.
+- \`smr [path]\`: browse OneDrive → select a file → transcribe (Whisper) + summarize (Gemini, Korean) → upload.
 
 ## Manage
-- `yt-botctl`             : menu
-- `yt-botctl settings`    : edit env values
-- `yt-botctl status`      : systemd status
-- `yt-botctl logs`        : follow logs
-- `yt-botctl delete`      : uninstall
+- \`yt-botctl\`             : menu
+- \`yt-botctl settings\`    : edit env values
+- \`yt-botctl status\`      : systemd status
+- \`yt-botctl logs\`        : follow logs
+- \`yt-botctl delete\`      : uninstall
 
 ## Files/Dirs
 - Code      : /opt/yt-bot/youtube_recorder_bot.py
