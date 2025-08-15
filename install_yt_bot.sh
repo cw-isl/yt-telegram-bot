@@ -9,7 +9,7 @@ set -euo pipefail
 # - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
 # - systemd unit (uses venv python)
-# - admin CLI (yt-botctl, with menu editing & OneDrive token writer)
+# - admin CLI (yt-botctl, env editor + OneDrive token/drive picker)
 # ==============================
 
 NOTICE_URL="http://mmm.com"   # TODO: replace with real guide URL
@@ -151,12 +151,12 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5) rclone remote folders (optional now — remote itself is created later in yt-botctl)
+# 5) rclone note (remote folders will be ensured from menu)
 # ------------------------------------------------------------------------------
 say "=== rclone note ==="
 echo "Remote name is fixed to 'onedrive'."
-echo "Use 'yt-botctl' → 'Set OneDrive token (JSON)' to create/update rclone.conf."
-echo "After that, you can return here and run: rclone mkdir onedrive:/$RCLONE_FOLDER_VIDEOS (handled in menu too)."
+echo "Use 'yt-botctl' → 'Set OneDrive token (JSON)' to create/update rclone.conf,"
+echo "then 'Select OneDrive drive' to choose drive_id/drive_type."
 
 # ------------------------------------------------------------------------------
 # 6) Fetch bot code (from GitHub Raw or local path)
@@ -217,7 +217,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl) — env editor + OneDrive token writer
+# 8) Admin CLI (yt-botctl) — env editor + OneDrive token/drive picker
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
@@ -292,7 +292,7 @@ rclone_conf_path() {
 }
 
 write_onedrive_token() {
-  local conf path dir user home
+  local conf path dir user home token
   user="$(svc_user)"; home="$(svc_home)"
   path="$(rclone_conf_path)"; dir="$(dirname "$path")"
   sudo -u "$user" mkdir -p "$dir"
@@ -300,7 +300,6 @@ write_onedrive_token() {
   echo "Paste your OneDrive token JSON (single line from rclone)."
   echo "Example starts with: {\"access_token\": ... }"
   read -r -p "Token JSON: " token
-
   if [ -z "$token" ]; then
     echo "Empty input. Canceled."; return 1
   fi
@@ -313,21 +312,115 @@ EOT
   sudo chown "$user":"$user" "$path"
   sudo chmod 600 "$path"
   echo "Saved: $path"
+
   echo "Testing 'rclone about ${FIXED_REMOTE}:' ..."
   if sudo -u "$user" rclone about "${FIXED_REMOTE}:" >/dev/null 2>&1; then
     echo "OK: rclone can access OneDrive."
+    echo
+    echo "Now we'll list available drives and let you pick one."
+    select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
   else
     echo "WARN: rclone test failed. Double-check the token or run 'rclone config'."
   fi
 }
 
+# --- List & choose drive_id/drive_type, then write into rclone.conf
+select_onedrive_drive() {
+  local user home path lines count i choice id type
+  user="$(svc_user)"; home="$(svc_home)"
+  path="$(rclone_conf_path)"
+
+  echo "Querying drives via: rclone backend drives ${FIXED_REMOTE}:"
+  if ! mapfile -t lines < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
+    echo "Failed to list drives. Make sure token is valid."
+    return 1
+  fi
+
+  # Filter lines that look like "id=..., driveType=..."
+  declare -a items ids types
+  count=0
+  for ln in "${lines[@]}"; do
+    # Try to extract id and type from typical patterns
+    id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,]+).*/\1/p')"
+    type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]+).*/\1/p')"
+    if [ -n "$id" ] && [ -n "$type" ]; then
+      items[$count]="$ln"
+      ids[$count]="$id"
+      types[$count]="$type"
+      count=$((count+1))
+    fi
+  done
+
+  if [ "$count" -eq 0 ]; then
+    echo "Could not parse drive list automatically."
+    read -r -p "Enter drive_id manually: " id
+    read -r -p "Enter drive_type (personal|business|documentLibrary): " type
+  else
+    echo "Found $count drive(s):"
+    for ((i=0;i<count;i++)); do
+      printf "  %d) id=%s  type=%s  | %s\n" "$((i+1))" "${ids[$i]}" "${types[$i]}" "${items[$i]}"
+    done
+    while true; do
+      read -r -p "Pick a number (1-$count), or press Enter to cancel: " choice || true
+      [ -z "$choice" ] && return 1
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+        idx=$((choice-1))
+        id="${ids[$idx]}"
+        type="${types[$idx]}"
+        break
+      fi
+    done
+  fi
+
+  if [ -z "${id:-}" ] || [ -z "${type:-}" ]; then
+    echo "Empty id/type; canceled."
+    return 1
+  fi
+
+  # Write into rclone.conf (preserve token & other fields)
+  echo "Writing drive_id/drive_type into: $path"
+  sudo awk -v sec="${FIXED_REMOTE}" -v id="$id" -v typ="$type" '
+    BEGIN{ insec=0; has_id=0; has_type=0 }
+    /^\[.*\]$/ {
+      if (insec==1 && has_id==0)  print "drive_id = " id
+      if (insec==1 && has_type==0) print "drive_type = " typ
+      insec=0
+    }
+    $0=="["sec"]"{ insec=1 }
+    {
+      if (insec==1) {
+        if ($0 ~ /^drive_id[[:space:]]*=/)   { print "drive_id = " id; has_id=1; next }
+        if ($0 ~ /^drive_type[[:space:]]*=/) { print "drive_type = " typ; has_type=1; next }
+      }
+      print
+    }
+    END {
+      if (insec==1) {
+        if (has_id==0)  print "drive_id = " id
+        if (has_type==0) print "drive_type = " typ
+      }
+    }
+  ' "$path" | sudo tee "$path.tmp" >/dev/null
+
+  sudo mv "$path.tmp" "$path"
+  sudo chown "$user":"$user" "$path"
+  sudo chmod 600 "$path"
+  echo "Updated. drive_id=${id}, drive_type=${type}"
+
+  echo "Testing access with new drive_id/type..."
+  if sudo -u "$user" rclone lsd "${FIXED_REMOTE}:" >/dev/null 2>&1; then
+    echo "OK: drive selection works."
+  else
+    echo "WARN: lsd failed; verify the chosen drive has access."
+  fi
+}
+
 ensure_remote_dirs() {
-  ensure_env_file
-  local user home remote folder_v folder_t
+  local user remote folder_v folder_t
   remote="${FIXED_REMOTE}"
   folder_v="$(getv RCLONE_FOLDER_VIDEOS)"
   folder_t="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
-  user="$(svc_user)"
+  user="$(systemctl show "$UNIT" -p User --value 2>/dev/null || id -un)"
   echo "Ensuring remote folders on ${remote}:/"
   sudo -u "$user" rclone mkdir "${remote}:/${folder_v}" || true
   sudo -u "$user" rclone mkdir "${remote}:/${folder_t}" || true
@@ -377,7 +470,8 @@ Edit which setting?
   6) WHISPER_MODEL
   7) WHISPER_DEVICE
   8) Ensure rclone remote folders
-  9) Set OneDrive token (JSON) -> write rclone.conf
+  9) Set OneDrive token (JSON) -> write rclone.conf & pick drive
+ 10) Select OneDrive drive (list & pick again)
   0) Back
 EOM
     read -r -p "> " sel
@@ -391,6 +485,7 @@ EOM
       7) key="WHISPER_DEVICE" ;;
       8) ensure_remote_dirs; read -r -p "Enter to continue..." _; continue ;;
       9) write_onedrive_token; read -r -p "Enter to continue..." _; continue ;;
+     10) select_onedrive_drive; read -r -p "Enter to continue..." _; continue ;;
       0) break ;;
       *) continue ;;
     esac
@@ -473,7 +568,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 
 ## Manage
 - \`yt-botctl\`             : menu
-- \`yt-botctl settings\`    : edit env values / set OneDrive token
+- \`yt-botctl settings\`    : edit env values / set OneDrive token / pick drive
 - \`yt-botctl status\`      : systemd status
 - \`yt-botctl logs\`        : follow logs
 - \`yt-botctl delete\`      : uninstall
