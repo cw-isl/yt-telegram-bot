@@ -169,18 +169,16 @@ rclone mkdir "${RCLONE_REMOTE}:/${RCLONE_FOLDER_TRANSCRIPTS}" || true
 # 6) Fetch bot code (from GitHub Raw or local path)
 # ------------------------------------------------------------------------------
 say "=== Fetch bot code ==="
-# !!! Replace this with your real RAW URL
-DEFAULT_BOT_CODE_URL="https://raw.githubusercontent.com/<YOUR_GH_USER>/<YOUR_REPO>/main/youtube_recorder_bot.py"
-read -r -p "Bot code Raw URL [default: $DEFAULT_BOT_CODE_URL] (leave blank to provide a local path): " BOT_CODE_URL || true
+# >>> CHANGED: set real GitHub Raw default and use it on Enter
+DEFAULT_BOT_CODE_URL="https://raw.githubusercontent.com/cw-isl/yt-telegram-bot/main/youtube_recorder_bot.py"
+read -r -p "Bot code Raw URL [default: $DEFAULT_BOT_CODE_URL] (press Enter to use default, or type another URL): " BOT_CODE_URL || true
+BOT_CODE_URL="${BOT_CODE_URL:-$DEFAULT_BOT_CODE_URL}"
 
-if [ -n "${BOT_CODE_URL:-}" ]; then
-  if curl -fsSL "$BOT_CODE_URL" -o /opt/yt-bot/youtube_recorder_bot.py; then
-    echo "Downloaded bot code from: $BOT_CODE_URL"
-  else
-    err "Failed to download from the URL."
-    exit 1
-  fi
+if curl -fsSL "$BOT_CODE_URL" -o /opt/yt-bot/youtube_recorder_bot.py; then
+  echo "Downloaded bot code from: $BOT_CODE_URL"
 else
+  err "Failed to download from the URL: $BOT_CODE_URL"
+  echo "You can provide a local path instead."
   read -r -p "Local path to youtube_recorder_bot.py: " BOT_CODE_PATH
   if [ ! -f "$BOT_CODE_PATH" ]; then
     err "File not found: $BOT_CODE_PATH"
@@ -217,7 +215,7 @@ EOF
 
 systemctl daemon-reload
 
-# ▶ 핵심 변경: BOT_TOKEN이 비어있으면 enable만 하고 start는 보류
+# ▶ If BOT_TOKEN empty: install but do not start
 if [ -z "${RAW_BOT_TOKEN:-}" ]; then
   say "[INFO] BOT_TOKEN is empty → service will be installed but NOT started."
   systemctl enable youtube_bot
