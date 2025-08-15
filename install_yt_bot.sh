@@ -9,7 +9,7 @@ set -euo pipefail
 # - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
 # - systemd unit (uses venv python)
-# - admin CLI (yt-botctl, with menu editing & template auto-create)
+# - admin CLI (yt-botctl, with menu editing & OneDrive token writer)
 # ==============================
 
 NOTICE_URL="http://mmm.com"   # TODO: replace with real guide URL
@@ -34,9 +34,7 @@ ensure_root() {
     exit 1
   fi
 }
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1
-}
+require_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # escape a single line for safe ENV file saving
 escape_line() {
@@ -118,8 +116,10 @@ ENV_FILE="/etc/yt-bot/yt-bot.env"
 
 read -r -p "BOT_TOKEN (optional, press Enter to skip): " RAW_BOT_TOKEN || true
 read -r -p "GEMINI_API_KEY (optional, Enter to skip): " RAW_GEMINI || true
-read -r -p "RCLONE_REMOTE [default: onedrive]: " RCLONE_REMOTE || true
-RCLONE_REMOTE="${RCLONE_REMOTE:-onedrive}"
+
+# RCLONE_REMOTE is fixed to 'onedrive'
+RCLONE_REMOTE="onedrive"
+
 read -r -p "RCLONE_FOLDER_VIDEOS [default: YouTube_Backup]: " RCLONE_FOLDER_VIDEOS || true
 RCLONE_FOLDER_VIDEOS="${RCLONE_FOLDER_VIDEOS:-YouTube_Backup}"
 read -r -p "RCLONE_FOLDER_TRANSCRIPTS [default: YouTube_Backup/Transcripts]: " RCLONE_FOLDER_TRANSCRIPTS || true
@@ -151,25 +151,17 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5) rclone remote check
+# 5) rclone remote folders (optional now — remote itself is created later in yt-botctl)
 # ------------------------------------------------------------------------------
-say "=== rclone remote check ==="
-if ! rclone listremotes | grep -q "^${RCLONE_REMOTE}:"; then
-  echo "Remote '$RCLONE_REMOTE' not found in rclone config."
-  echo "Open a new terminal and run: rclone config"
-  echo "After creating the remote, press Enter to continue."
-  read -r
-fi
-
-say "=== Ensure remote folders ==="
-rclone mkdir "${RCLONE_REMOTE}:/${RCLONE_FOLDER_VIDEOS}" || true
-rclone mkdir "${RCLONE_REMOTE}:/${RCLONE_FOLDER_TRANSCRIPTS}" || true
+say "=== rclone note ==="
+echo "Remote name is fixed to 'onedrive'."
+echo "Use 'yt-botctl' → 'Set OneDrive token (JSON)' to create/update rclone.conf."
+echo "After that, you can return here and run: rclone mkdir onedrive:/$RCLONE_FOLDER_VIDEOS (handled in menu too)."
 
 # ------------------------------------------------------------------------------
 # 6) Fetch bot code (from GitHub Raw or local path)
 # ------------------------------------------------------------------------------
 say "=== Fetch bot code ==="
-# >>> CHANGED: set real GitHub Raw default and use it on Enter
 DEFAULT_BOT_CODE_URL="https://raw.githubusercontent.com/cw-isl/yt-telegram-bot/main/youtube_recorder_bot.py"
 read -r -p "Bot code Raw URL [default: $DEFAULT_BOT_CODE_URL] (press Enter to use default, or type another URL): " BOT_CODE_URL || true
 BOT_CODE_URL="${BOT_CODE_URL:-$DEFAULT_BOT_CODE_URL}"
@@ -225,7 +217,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl) — menu editing + template auto-create
+# 8) Admin CLI (yt-botctl) — env editor + OneDrive token writer
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
@@ -235,6 +227,7 @@ set -euo pipefail
 ENV_DIR="/etc/yt-bot"
 ENV_FILE="$ENV_DIR/yt-bot.env"
 UNIT="youtube_bot.service"
+FIXED_REMOTE="onedrive"
 
 ensure_env_file() {
   sudo mkdir -p "$ENV_DIR"
@@ -246,7 +239,7 @@ BOT_TOKEN=""
 # Gemini API key (optional – set later via yt-botctl)
 GEMINI_API_KEY=""
 
-# Rclone settings
+# Rclone settings (remote name is fixed to 'onedrive')
 RCLONE_REMOTE="onedrive"
 RCLONE_FOLDER_VIDEOS="YouTube_Backup"
 RCLONE_FOLDER_TRANSCRIPTS="YouTube_Backup/Transcripts"
@@ -277,29 +270,75 @@ getv() {
   ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
 }
 
-# ===== PATCH: robust setter (atomic awk replace-or-append). No re-escaping here
-# because menu already escapes quotes/backslashes before calling setv.
+# atomic replace-or-append
 setv() {
   local key="$1" val="$2"
-
-  # Atomic update via awk: replace the KEY=... line; append if not present.
   sudo awk -v k="$key" -v v="$val" '
     BEGIN { updated=0 }
     $0 ~ "^" k "=" { print k "=\"" v "\""; updated=1; next }
     { print }
     END { if (updated==0) print k "=\"" v "\"" }
   ' "$ENV_FILE" | sudo tee "$ENV_FILE.tmp" >/dev/null
-
   sudo mv "$ENV_FILE.tmp" "$ENV_FILE"
   sudo chmod 600 "$ENV_FILE"
 }
 
+svc_user() { systemctl show "$UNIT" -p User --value 2>/dev/null || id -un; }
+svc_home() { getent passwd "$(svc_user)" | cut -d: -f6; }
+
+rclone_conf_path() {
+  local home; home="$(svc_home)"
+  echo "$home/.config/rclone/rclone.conf"
+}
+
+write_onedrive_token() {
+  local conf path dir user home
+  user="$(svc_user)"; home="$(svc_home)"
+  path="$(rclone_conf_path)"; dir="$(dirname "$path")"
+  sudo -u "$user" mkdir -p "$dir"
+  echo
+  echo "Paste your OneDrive token JSON (single line from rclone)."
+  echo "Example starts with: {\"access_token\": ... }"
+  read -r -p "Token JSON: " token
+
+  if [ -z "$token" ]; then
+    echo "Empty input. Canceled."; return 1
+  fi
+
+  sudo tee "$path" >/dev/null <<EOT
+[${FIXED_REMOTE}]
+type = onedrive
+token = ${token}
+EOT
+  sudo chown "$user":"$user" "$path"
+  sudo chmod 600 "$path"
+  echo "Saved: $path"
+  echo "Testing 'rclone about ${FIXED_REMOTE}:' ..."
+  if sudo -u "$user" rclone about "${FIXED_REMOTE}:" >/dev/null 2>&1; then
+    echo "OK: rclone can access OneDrive."
+  else
+    echo "WARN: rclone test failed. Double-check the token or run 'rclone config'."
+  fi
+}
+
+ensure_remote_dirs() {
+  ensure_env_file
+  local user home remote folder_v folder_t
+  remote="${FIXED_REMOTE}"
+  folder_v="$(getv RCLONE_FOLDER_VIDEOS)"
+  folder_t="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
+  user="$(svc_user)"
+  echo "Ensuring remote folders on ${remote}:/"
+  sudo -u "$user" rclone mkdir "${remote}:/${folder_v}" || true
+  sudo -u "$user" rclone mkdir "${remote}:/${folder_t}" || true
+  echo "Done."
+}
+
 print_settings() {
   echo "Current settings:"
-  local BT GK RR VF TF BH WM WD
+  local BT GK VF TF BH WM WD
   BT="$(getv BOT_TOKEN)"
   GK="$(getv GEMINI_API_KEY)"
-  RR="$(getv RCLONE_REMOTE)"
   VF="$(getv RCLONE_FOLDER_VIDEOS)"
   TF="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
   BH="$(getv BOT_HOME)"
@@ -307,12 +346,14 @@ print_settings() {
   WD="$(getv WHISPER_DEVICE)"
   printf "  %-26s = %s\n" "BOT_TOKEN"                 "$(mask "$BT")"
   printf "  %-26s = %s\n" "GEMINI_API_KEY"            "$(mask "$GK")"
-  printf "  %-26s = %s\n" "RCLONE_REMOTE"             "${RR}"
+  printf "  %-26s = %s\n" "RCLONE_REMOTE"             "onedrive (fixed)"
   printf "  %-26s = %s\n" "RCLONE_FOLDER_VIDEOS"      "${VF}"
   printf "  %-26s = %s\n" "RCLONE_FOLDER_TRANSCRIPTS" "${TF}"
   printf "  %-26s = %s\n" "BOT_HOME"                  "${BH}"
   printf "  %-26s = %s\n" "WHISPER_MODEL"             "${WM}"
   printf "  %-26s = %s\n" "WHISPER_DEVICE"            "${WD}"
+  echo
+  echo "rclone.conf: $(rclone_conf_path)"
 }
 
 restart_service() {
@@ -321,47 +362,35 @@ restart_service() {
   sleep 1
 }
 
-ensure_remote_dirs() {
-  local remote folder_v folder_t
-  remote="$(getv RCLONE_REMOTE)"
-  folder_v="$(getv RCLONE_FOLDER_VIDEOS)"
-  folder_t="$(getv RCLONE_FOLDER_TRANSCRIPTS)"
-  if [ -z "$remote" ]; then echo "RCLONE_REMOTE is empty."; return 1; fi
-  rclone mkdir "${remote}:/${folder_v}" || true
-  rclone mkdir "${remote}:/${folder_t}" || true
-  echo "Ensured: ${remote}:/${folder_v} and ${remote}:/${folder_t}"
-}
-
 menu_settings() {
   ensure_env_file
   while true; do
     clear
     print_settings
     cat <<'EOM'
-
 Edit which setting?
   1) BOT_TOKEN
   2) GEMINI_API_KEY
-  3) RCLONE_REMOTE
-  4) RCLONE_FOLDER_VIDEOS
-  5) RCLONE_FOLDER_TRANSCRIPTS
-  6) BOT_HOME
-  7) WHISPER_MODEL
-  8) WHISPER_DEVICE
-  9) Ensure rclone remote folders
+  3) RCLONE_FOLDER_VIDEOS
+  4) RCLONE_FOLDER_TRANSCRIPTS
+  5) BOT_HOME
+  6) WHISPER_MODEL
+  7) WHISPER_DEVICE
+  8) Ensure rclone remote folders
+  9) Set OneDrive token (JSON) -> write rclone.conf
   0) Back
 EOM
     read -r -p "> " sel
     case "$sel" in
       1) key="BOT_TOKEN" ;;
       2) key="GEMINI_API_KEY" ;;
-      3) key="RCLONE_REMOTE" ;;
-      4) key="RCLONE_FOLDER_VIDEOS" ;;
-      5) key="RCLONE_FOLDER_TRANSCRIPTS" ;;
-      6) key="BOT_HOME" ;;
-      7) key="WHISPER_MODEL" ;;
-      8) key="WHISPER_DEVICE" ;;
-      9) ensure_remote_dirs; read -r -p "Press Enter to continue..." _; continue ;;
+      3) key="RCLONE_FOLDER_VIDEOS" ;;
+      4) key="RCLONE_FOLDER_TRANSCRIPTS" ;;
+      5) key="BOT_HOME" ;;
+      6) key="WHISPER_MODEL" ;;
+      7) key="WHISPER_DEVICE" ;;
+      8) ensure_remote_dirs; read -r -p "Enter to continue..." _; continue ;;
+      9) write_onedrive_token; read -r -p "Enter to continue..." _; continue ;;
       0) break ;;
       *) continue ;;
     esac
@@ -444,7 +473,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 
 ## Manage
 - \`yt-botctl\`             : menu
-- \`yt-botctl settings\`    : edit env values
+- \`yt-botctl settings\`    : edit env values / set OneDrive token
 - \`yt-botctl status\`      : systemd status
 - \`yt-botctl logs\`        : follow logs
 - \`yt-botctl delete\`      : uninstall
@@ -454,6 +483,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 - Env       : /etc/yt-bot/yt-bot.env
 - Logs      : /var/log/yt-bot/bot.log
 - Work home : $BOT_HOME (recordings/, temp jobs)
+- rclone    : ~<service-user>/.config/rclone/rclone.conf  (remote name: onedrive)
 EOF
 
 # ------------------------------------------------------------------------------
