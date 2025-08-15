@@ -270,18 +270,37 @@ getv() {
   ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
 }
 
-# --- robust replace-or-append using tmp->mv; values are already escaped by the menu
-setv() {
-  local key="$1" val="$2" file="$ENV_FILE"
-  local tmp; tmp="$(mktemp)"
-  if sudo grep -q -E "^[[:space:]]*${key}=" "$file"; then
-    sudo sed -E "s|^[[:space:]]*${key}=.*|${key}=\"${val}\"|" "$file" | sudo tee "$tmp" >/dev/null
-  else
-    { sudo cat "$file"; echo "${key}=\"${val}\""; } | sudo tee "$tmp" >/dev/null
-  fi
-  sudo mv "$tmp" "$file"
-  sudo chmod 600 "$file"
-  echo "Saved → ${key}=$( [ -n "$val" ] && printf '%s' "${val:0:3}****${val: -3}" || echo '\"\"' )"
+# ---------- Base64 안전 저장: 원자적 replace-or-append ----------
+setv_b64() {
+  local key="$1" val_b64="$2"
+  sudo python3 - "$ENV_FILE" "$key" "$val_b64" <<'PY'
+import sys,base64,os,tempfile
+env_path,key,val_b64 = sys.argv[1], sys.argv[2], sys.argv[3]
+val = base64.b64decode(val_b64.encode()).decode()
+
+lines=[]
+if os.path.exists(env_path):
+    with open(env_path,'r',encoding='utf-8',errors='ignore') as f:
+        lines=f.readlines()
+
+found=False
+out=[]
+for ln in lines:
+    if ln.startswith(key+"="):
+        out.append(f'{key}="{val}"\n')
+        found=True
+    else:
+        out.append(ln)
+if not found:
+    out.append(f'{key}="{val}"\n')
+
+os.makedirs(os.path.dirname(env_path), exist_ok=True)
+fd,tmp = tempfile.mkstemp(dir=os.path.dirname(env_path))
+with os.fdopen(fd,'w',encoding='utf-8') as f:
+    f.writelines(out)
+os.replace(tmp, env_path)
+os.chmod(env_path, 0o600)
+PY
 }
 
 svc_user() { systemctl show "$UNIT" -p User --value 2>/dev/null || id -un; }
@@ -371,7 +390,7 @@ select_onedrive_drive() {
     done
   fi
 
-  if [ -z "${id:-}" ] || [ -z "${type:-}" ]; then
+  if [ -z "${id:-}" ] || [ -z "${type:-}" ] then
     echo "Empty id/type; canceled."
     return 1
   fi
@@ -502,14 +521,9 @@ EOM
     echo "Current $key: ${cur}"
     read -r -p "New value for $key (leave empty to cancel): " val
     [ -z "${val}" ] && continue
-    val="$(printf "%s" "$val" | python3 - <<'PY'
-import sys
-s=sys.stdin.read().rstrip("\n")
-s=s.replace('\\','\\\\').replace('"','\\"')
-print(s)
-PY
-)"
-    setv "$key" "$val"
+    val_b64="$(printf "%s" "$val" | base64 | tr -d '\n')"
+    setv_b64 "$key" "$val_b64"
+    echo "Saved → $key updated."
     echo "Updated. Restarting service..."
     restart_service
   done
@@ -586,7 +600,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 - Code      : /opt/yt-bot/youtube_recorder_bot.py
 - Env       : /etc/yt-bot/yt-bot.env
 - Logs      : /var/log/yt-bot/bot.log
-- Work home : $BOT_HOME (recordings/, temp jobs)
+- Work home : '"$BOT_HOME"' (recordings/, temp jobs)
 - rclone    : ~<service-user>/.config/rclone/rclone.conf  (remote name: onedrive)
 EOF
 
