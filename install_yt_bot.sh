@@ -270,17 +270,18 @@ getv() {
   ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
 }
 
-# atomic replace-or-append
+# --- robust replace-or-append using tmp->mv; values are already escaped by the menu
 setv() {
-  local key="$1" val="$2"
-  sudo awk -v k="$key" -v v="$val" '
-    BEGIN { updated=0 }
-    $0 ~ "^" k "=" { print k "=\"" v "\""; updated=1; next }
-    { print }
-    END { if (updated==0) print k "=\"" v "\"" }
-  ' "$ENV_FILE" | sudo tee "$ENV_FILE.tmp" >/dev/null
-  sudo mv "$ENV_FILE.tmp" "$ENV_FILE"
-  sudo chmod 600 "$ENV_FILE"
+  local key="$1" val="$2" file="$ENV_FILE"
+  local tmp; tmp="$(mktemp)"
+  if sudo grep -q -E "^[[:space:]]*${key}=" "$file"; then
+    sudo sed -E "s|^[[:space:]]*${key}=.*|${key}=\"${val}\"|" "$file" | sudo tee "$tmp" >/dev/null
+  else
+    { sudo cat "$file"; echo "${key}=\"${val}\""; } | sudo tee "$tmp" >/dev/null
+  fi
+  sudo mv "$tmp" "$file"
+  sudo chmod 600 "$file"
+  echo "Saved → ${key}=$( [ -n "$val" ] && printf '%s' "${val:0:3}****${val: -3}" || echo '\"\"' )"
 }
 
 svc_user() { systemctl show "$UNIT" -p User --value 2>/dev/null || id -un; }
@@ -336,7 +337,6 @@ select_onedrive_drive() {
     return 1
   fi
 
-  # Filter lines that look like "id=..., driveType=..."
   declare -a items ids types
   count=0
   for ln in "${lines[@]}"; do
@@ -376,7 +376,6 @@ select_onedrive_drive() {
     return 1
   fi
 
-  # Write into rclone.conf (preserve token & other fields)
   echo "Writing drive_id/drive_type into: $path"
   sudo awk -v sec="${FIXED_REMOTE}" -v id="$id" -v typ="$type" '
     BEGIN{ insec=0; has_id=0; has_type=0 }
