@@ -340,7 +340,6 @@ select_onedrive_drive() {
   declare -a items ids types
   count=0
   for ln in "${lines[@]}"; do
-    # Try to extract id and type from typical patterns
     id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,]+).*/\1/p')"
     type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]+).*/\1/p')"
     if [ -n "$id" ] && [ -n "$type" ]; then
@@ -449,6 +448,15 @@ print_settings() {
   echo "rclone.conf: $(rclone_conf_path)"
 }
 
+show_env_all() {
+  ensure_env_file
+  echo
+  echo "===== $ENV_FILE (raw) ====="
+  sudo nl -ba "$ENV_FILE" || true
+  echo "==========================="
+  read -r -p "Enter to continue..." _
+}
+
 restart_service() {
   sudo systemctl daemon-reload
   sudo systemctl restart "$UNIT"
@@ -472,6 +480,7 @@ Edit which setting?
   8) Ensure rclone remote folders
   9) Set OneDrive token (JSON) -> write rclone.conf & pick drive
  10) Select OneDrive drive (list & pick again)
+ 11) Show ENV file (raw contents)
   0) Back
 EOM
     read -r -p "> " sel
@@ -486,6 +495,7 @@ EOM
       8) ensure_remote_dirs; read -r -p "Enter to continue..." _; continue ;;
       9) write_onedrive_token; read -r -p "Enter to continue..." _; continue ;;
      10) select_onedrive_drive; read -r -p "Enter to continue..." _; continue ;;
+     11) show_env_all; continue ;;
       0) break ;;
       *) continue ;;
     esac
