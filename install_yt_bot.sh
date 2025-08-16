@@ -228,6 +228,7 @@ ENV_DIR="/etc/yt-bot"
 ENV_FILE="$ENV_DIR/yt-bot.env"
 UNIT="youtube_bot.service"
 FIXED_REMOTE="onedrive"
+GRAPH="https://graph.microsoft.com/v1.0"
 
 ensure_env_file() {
   sudo mkdir -p "$ENV_DIR"
@@ -311,7 +312,7 @@ rclone_conf_path() {
   echo "$home/.config/rclone/rclone.conf"
 }
 
-# --- rclone.conf에서 token JSON의 access_token을 꺼내는 헬퍼 ---
+# --- rclone.conf에서 token JSON(access_token 포함)을 읽기 ---
 get_access_token_from_conf() {
   local conf="$1"
   local token_json
@@ -322,6 +323,23 @@ get_access_token_from_conf() {
   ' "$conf" 2>/dev/null || true)"
   [ -z "${token_json:-}" ] && { echo ""; return 1; }
   jq -r '.access_token // empty' <<<"$token_json"
+}
+
+# --- Microsoft Graph로 드라이브 목록 가져오기 ---
+graph_list_drives() {
+  local at="$1"
+  local ok=1
+  if out="$(curl -fsS -H "Authorization: Bearer $at" "$GRAPH/me/drives" 2>/dev/null)"; then
+    echo "$out" | jq -r '.value[] | [.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
+    ok=0
+  fi
+  if [ $ok -ne 0 ]; then
+    if out="$(curl -fsS -H "Authorization: Bearer $at" "$GRAPH/me/drive" 2>/dev/null)"; then
+      echo "$out" | jq -r '[.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
+      ok=0
+    fi
+  fi
+  return $ok
 }
 
 write_onedrive_token() {
@@ -355,7 +373,6 @@ EOT
 
   echo
   echo "Now we'll list available drives and let you pick one."
-  # 저장 후 **항상** 드라이브 선택으로 진입
   select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
 }
 
@@ -365,18 +382,26 @@ select_onedrive_drive() {
   user="$(svc_user)"
   conf="$(rclone_conf_path)"
 
-  echo "Querying drives via: rclone backend drives ${FIXED_REMOTE}:"
+  echo "Querying drives..."
 
-  # 1) JSON 출력 우선 시도 (신형 rclone)
-  local -a lines
+  # 1) Graph API (토큰에서 access_token 추출 → /me/drives)
+  declare -a lines
   lines=()
-  if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
-    if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
-      mapfile -t lines < <(jq -r '.drives[] | "\(.id)\t\(.driveType)\t\(.name // "")"' /tmp/ytb_drives.json)
+  access_token="$(get_access_token_from_conf "$conf" || true)"
+  if [ -n "${access_token:-}" ]; then
+    if mapfile -t lines < <(graph_list_drives "$access_token"); then :; fi
+  fi
+
+  # 2) rclone backend drives (JSON 출력)
+  if [ "${#lines[@]}" -eq 0 ]; then
+    if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
+      if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
+        mapfile -t lines < <(jq -r '.drives[] | "\(.id)\t\(.driveType)\t\(.name // "")"' /tmp/ytb_drives.json)
+      fi
     fi
   fi
 
-  # 2) 구버전 텍스트 파싱 폴백
+  # 3) 구버전 텍스트 파싱
   if [ "${#lines[@]}" -eq 0 ]; then
     if mapfile -t _raw < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
       declare -a parsed; parsed=()
@@ -391,30 +416,7 @@ select_onedrive_drive() {
     fi
   fi
 
-  # 3) Graph API 직접 호출 폴백 (access_token 추출 후 호출)
-  if [ "${#lines[@]}" -eq 0 ]; then
-    echo "rclone output parse failed; trying Microsoft Graph API directly..."
-    local access_token
-    access_token="$(get_access_token_from_conf "$conf" || true)"
-    if [ -n "${access_token:-}" ]; then
-      local tmp_json="/tmp/ytb_graph_drives_list.txt"
-      # me/drive (기본) + me/drives (전체)
-      {
-        curl -fsSL -H "Authorization: Bearer $access_token" \
-          "https://graph.microsoft.com/v1.0/me/drive?\$select=id,driveType,name" \
-          | jq -r '"\(.id // empty)\t\(.driveType // empty)\t\(.name // "")"'
-        curl -fsSL -H "Authorization: Bearer $access_token" \
-          "https://graph.microsoft.com/v1.0/me/drives?\$select=id,driveType,name" \
-          | jq -r '.value[]? | "\(.id // empty)\t\(.driveType // empty)\t\(.name // "")"'
-      } > "$tmp_json" 2>/dev/null || true
-      # 중복/빈행 제거
-      mapfile -t lines < <(awk 'NF && !seen[$0]++' "$tmp_json" 2>/dev/null || true)
-    else
-      echo "Could not read access_token from rclone.conf token JSON."
-    fi
-  fi
-
-  # === 선택 UI ===
+  # === 선택 UI / 수동 입력 ===
   local id type dname i choice
   if [ "${#lines[@]}" -gt 0 ]; then
     echo "Found ${#lines[@]} drive(s):"
@@ -458,7 +460,7 @@ select_onedrive_drive() {
       print
     }
     END {
-      if (insec=1) {
+      if (insec==1) {
         if (has_id==0)  print "drive_id = " id
         if (has_type==0) print "drive_type = " typ
       }
