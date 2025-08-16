@@ -9,7 +9,7 @@ set -euo pipefail
 # - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
 # - systemd unit (uses venv python)
-# - admin CLI (yt-botctl, env editor + OneDrive token/drive picker)
+# - admin CLI (yt-botctl, env editor + OneDrive helper)
 # ==============================
 
 NOTICE_URL="http://mmm.com"   # TODO: replace with real guide URL
@@ -81,10 +81,16 @@ if ! id "$TARGET_USER" >/dev/null 2>&1; then
   exit 1
 fi
 
-BOT_HOME_DEFAULT="/home/${TARGET_USER}"
+# Default BOT_HOME => /home/<user>/yt-bot  (사용자가 입력 안 하면 자동 지정)
+BOT_HOME_DEFAULT="/home/${TARGET_USER}/yt-bot"
 read -r -p "Bot home directory [default: $BOT_HOME_DEFAULT]: " BOT_HOME || true
 BOT_HOME="${BOT_HOME:-$BOT_HOME_DEFAULT}"
-mkdir -p "$BOT_HOME" "$BOT_HOME/recordings"
+
+# 필요한 폴더 자동 생성 (존재해도 OK)
+mkdir -p "$BOT_HOME" \
+         "$BOT_HOME/recordings" \
+         "$BOT_HOME/tmp" \
+         "$BOT_HOME/downloads"
 chown -R "$TARGET_USER":"$TARGET_USER" "$BOT_HOME"
 
 # App/Env/Logs
@@ -151,7 +157,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5) rclone note (remote folders will be ensured from menu)
+# 5) rclone note
 # ------------------------------------------------------------------------------
 say "=== rclone note ==="
 echo "Remote name is fixed to 'onedrive'."
@@ -639,7 +645,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 - Code      : /opt/yt-bot/youtube_recorder_bot.py
 - Env       : /etc/yt-bot/yt-bot.env
 - Logs      : /var/log/yt-bot/bot.log
-- Work home : '"$BOT_HOME"' (recordings/, temp jobs)
+- Work home : '"$BOT_HOME"' (recordings/, tmp/, downloads/)
 - rclone    : ~<service-user>/.config/rclone/rclone.conf  (remote name: onedrive)
 EOF
 
