@@ -155,8 +155,8 @@ fi
 # ------------------------------------------------------------------------------
 say "=== rclone note ==="
 echo "Remote name is fixed to 'onedrive'."
-echo "Use 'yt-botctl' → 'Set OneDrive token (JSON)' to create/update rclone.conf,"
-echo "then 'Select OneDrive drive' to choose drive_id/drive_type."
+echo "Use 'yt-botctl' → 'Install rclone & open rclone config' to install/refresh rclone,"
+echo "then pick your drive inside the wizard."
 
 # ------------------------------------------------------------------------------
 # 6) Fetch bot code (from GitHub Raw or local path)
@@ -217,7 +217,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl) — env editor + OneDrive token/drive picker
+# 8) Admin CLI (yt-botctl) — env editor + OneDrive helper
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
@@ -271,6 +271,49 @@ getv() {
   ( set -a; . "$ENV_FILE"; set +a; eval "printf '%s' \"\${$key-}\"" )
 }
 
+svc_user() { systemctl show "$UNIT" -p User --value 2>/dev/null || id -un; }
+svc_home() { getent passwd "$(svc_user)" | cut -d: -f6; }
+rclone_conf_path() { local home; home="$(svc_home)"; echo "$home/.config/rclone/rclone.conf"; }
+
+# --- rclone 설치 + 설정 마법사 열기 (메뉴 9번) ---
+rclone_install_and_config() {
+  echo "Installing/refreshing rclone..."
+  curl -fsSL https://rclone.org/install.sh | sudo bash
+
+  local user home conf dir
+  user="$(svc_user)"; home="$(svc_home)"
+  conf="$(rclone_conf_path)"; dir="$(dirname "$conf")"
+
+  sudo -u "$user" mkdir -p "$dir"
+  # onedrive 섹션이 없으면 최소 스텁 생성
+  if ! grep -q "^\[${FIXED_REMOTE}\]" "$conf" 2>/dev/null; then
+    echo "Creating minimal onedrive remote stub at $conf"
+    sudo tee -a "$conf" >/dev/null <<EOT
+[${FIXED_REMOTE}]
+type = onedrive
+EOT
+    sudo chown "$user":"$user" "$conf"
+    sudo chmod 600 "$conf"
+  fi
+
+  echo
+  echo "Launching rclone wizard. First, trying 'rclone config reconnect ${FIXED_REMOTE}:' ..."
+  if sudo -u "$user" rclone config reconnect "${FIXED_REMOTE}:"; then
+    echo "Reconnect finished."
+  else
+    echo "Reconnect not available or failed. Opening full 'rclone config' UI."
+    sudo -u "$user" rclone config
+  fi
+
+  echo
+  echo "Testing: rclone about ${FIXED_REMOTE}:"
+  if sudo -u "$user" rclone about "${FIXED_REMOTE}:"; then
+    echo "OK."
+  else
+    echo "WARN: 'about' failed. You may need to re-run 'rclone config'."
+  fi
+}
+
 # ---------- Base64 안전 저장: 원자적 replace-or-append ----------
 setv_b64() {
   local key="$1" val_b64="$2"
@@ -304,15 +347,7 @@ os.chmod(env_path, 0o600)
 PY
 }
 
-svc_user() { systemctl show "$UNIT" -p User --value 2>/dev/null || id -un; }
-svc_home() { getent passwd "$(svc_user)" | cut -d: -f6; }
-
-rclone_conf_path() {
-  local home; home="$(svc_home)"
-  echo "$home/.config/rclone/rclone.conf"
-}
-
-# --- rclone.conf에서 token JSON(access_token 포함)을 읽기 ---
+# --- (선택) 드라이브 자동 선택 도구들: 유지 ---
 get_access_token_from_conf() {
   local conf="$1"
   local token_json
@@ -325,16 +360,15 @@ get_access_token_from_conf() {
   jq -r '.access_token // empty' <<<"$token_json"
 }
 
-# --- Microsoft Graph로 드라이브 목록 가져오기 ---
 graph_list_drives() {
   local at="$1"
-  local ok=1
-  if out="$(curl -fsS -H "Authorization: Bearer $at" "$GRAPH/me/drives" 2>/dev/null)"; then
+  local ok=1 out
+  if out="$(curl -fsS -H "Authorization: Bearer $at" "https://graph.microsoft.com/v1.0/me/drives" 2>/dev/null)"; then
     echo "$out" | jq -r '.value[] | [.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
     ok=0
   fi
   if [ $ok -ne 0 ]; then
-    if out="$(curl -fsS -H "Authorization: Bearer $at" "$GRAPH/me/drive" 2>/dev/null)"; then
+    if out="$(curl -fsS -H "Authorization: Bearer $at" "https://graph.microsoft.com/v1.0/me/drive" 2>/dev/null)"; then
       echo "$out" | jq -r '[.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
       ok=0
     fi
@@ -342,57 +376,17 @@ graph_list_drives() {
   return $ok
 }
 
-write_onedrive_token() {
-  local path dir user token
-  user="$(svc_user)"
-  path="$(rclone_conf_path)"; dir="$(dirname "$path")"
-  sudo -u "$user" mkdir -p "$dir"
-  echo
-  echo "Paste your OneDrive token JSON (single line from rclone)."
-  echo "Example starts with: {\"access_token\": ... }"
-  read -r -p "Token JSON: " token
-  if [ -z "$token" ]; then
-    echo "Empty input. Canceled."; return 1
-  fi
-
-  sudo tee "$path" >/dev/null <<EOT
-[${FIXED_REMOTE}]
-type = onedrive
-token = ${token}
-EOT
-  sudo chown "$user":"$user" "$path"
-  sudo chmod 600 "$path"
-  echo "Saved: $path"
-
-  echo "Testing 'rclone about ${FIXED_REMOTE}:' ..."
-  if sudo -u "$user" rclone about "${FIXED_REMOTE}:" >/dev/null 2>&1; then
-    echo "OK: rclone can access OneDrive."
-  else
-    echo "NOTE: 'about' failed. This is 보통 드라이브를 아직 못 골라서 그래요."
-  fi
-
-  echo
-  echo "Now we'll list available drives and let you pick one."
-  select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
-}
-
-# --- List & choose drive_id/drive_type, then write into rclone.conf
 select_onedrive_drive() {
   local user conf
   user="$(svc_user)"
   conf="$(rclone_conf_path)"
 
   echo "Querying drives..."
-
-  # 1) Graph API (토큰에서 access_token 추출 → /me/drives)
-  declare -a lines
-  lines=()
+  declare -a lines; lines=()
   access_token="$(get_access_token_from_conf "$conf" || true)"
   if [ -n "${access_token:-}" ]; then
     if mapfile -t lines < <(graph_list_drives "$access_token"); then :; fi
   fi
-
-  # 2) rclone backend drives (JSON 출력)
   if [ "${#lines[@]}" -eq 0 ]; then
     if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
       if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
@@ -400,8 +394,6 @@ select_onedrive_drive() {
       fi
     fi
   fi
-
-  # 3) 구버전 텍스트 파싱
   if [ "${#lines[@]}" -eq 0 ]; then
     if mapfile -t _raw < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
       declare -a parsed; parsed=()
@@ -416,7 +408,6 @@ select_onedrive_drive() {
     fi
   fi
 
-  # === 선택 UI / 수동 입력 ===
   local id type dname i choice
   if [ "${#lines[@]}" -gt 0 ]; then
     echo "Found ${#lines[@]} drive(s):"
@@ -544,7 +535,7 @@ Edit which setting?
   6) WHISPER_MODEL
   7) WHISPER_DEVICE
   8) Ensure rclone remote folders
-  9) Set OneDrive token (JSON) -> write rclone.conf & pick drive
+  9) Install rclone & open rclone config (recommended)
  10) Select OneDrive drive (list & pick again)
  11) Show ENV file (raw contents)
   0) Back
@@ -559,7 +550,7 @@ EOM
       6) key="WHISPER_MODEL" ;;
       7) key="WHISPER_DEVICE" ;;
       8) ensure_remote_dirs; read -r -p "Enter to continue..." _; continue ;;
-      9) write_onedrive_token; read -r -p "Enter to continue..." _; continue ;;
+      9) rclone_install_and_config; read -r -p "Enter to continue..." _; continue ;;
      10) select_onedrive_drive; read -r -p "Enter to continue..." _; continue ;;
      11) show_env_all; continue ;;
       0) break ;;
@@ -639,7 +630,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 
 ## Manage
 - \`yt-botctl\`             : menu
-- \`yt-botctl settings\`    : edit env values / set OneDrive token / pick drive
+- \`yt-botctl settings\`    : edit env values / install rclone / configure onedrive
 - \`yt-botctl status\`      : systemd status
 - \`yt-botctl logs\`        : follow logs
 - \`yt-botctl delete\`      : uninstall
