@@ -390,7 +390,8 @@ select_onedrive_drive() {
     done
   fi
 
-  if [ -z "${id:-}" ] || [ -z "${type:-}" ] then
+  # >>> FIXED: close test brackets before then
+  if [ -z "${id:-}" ] || [ -z "${type:-}" ]; then
     echo "Empty id/type; canceled."
     return 1
   fi
