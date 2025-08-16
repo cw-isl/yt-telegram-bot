@@ -342,63 +342,70 @@ EOT
 
   echo
   echo "Now we'll list available drives and let you pick one."
-  # ⬇️ 저장 후 **항상** 드라이브 선택으로 진입
+  # 저장 후 **항상** 드라이브 선택으로 진입
   select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
 }
 
 # --- List & choose drive_id/drive_type, then write into rclone.conf
 select_onedrive_drive() {
-  local user home path lines count i choice id type
+  local user home conf lines i choice id type
   user="$(svc_user)"; home="$(svc_home)"
-  path="$(rclone_conf_path)"
+  conf="$(rclone_conf_path)"
 
   echo "Querying drives via: rclone backend drives ${FIXED_REMOTE}:"
-  if ! mapfile -t lines < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
-    echo "Failed to list drives. Make sure token is valid."
-    return 1
+
+  # 1) JSON 출력 우선 시도 (신형 rclone)
+  lines=()
+  if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
+    if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
+      echo "Found drives (JSON)."
+      mapfile -t lines < <(jq -r '.drives[] | "\(.id)\t\(.driveType)\t\(.name // "")"' /tmp/ytb_drives.json)
+    fi
   fi
 
-  declare -a items ids types
-  count=0
-  for ln in "${lines[@]}"; do
-    id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,]+).*/\1/p')"
-    type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]+).*/\1/p')"
-    if [ -n "$id" ] && [ -n "$type" ]; then
-      items[$count]="$ln"
-      ids[$count]="$id"
-      types[$count]="$type"
-      count=$((count+1))
+  # 2) 구버전 텍스트 파싱 폴백
+  if [ "${#lines[@]}" -eq 0 ]; then
+    if mapfile -t _raw < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
+      declare -a parsed; parsed=()
+      for ln in "${_raw[@]}"; do
+        _id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,\)]*).*/\1/p')"
+        _type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]*).*/\1/p')"
+        _name="$(echo "$ln" | sed -nE 's/.*name=([^,)]*).*/\1/p')"
+        if [ -n "$_id" ] && [ -n "$_type" ]; then
+          parsed+=("${_id}\t${_type}\t${_name}")
+        fi
+      done
+      lines=("${parsed[@]}")
     fi
-  done
+  fi
 
-  if [ "$count" -eq 0 ]; then
-    echo "Could not parse drive list automatically."
-    read -r -p "Enter drive_id manually: " id
-    read -r -p "Enter drive_type (personal|business|documentLibrary): " type
-  else
-    echo "Found $count drive(s):"
-    for ((i=0;i<count;i++)); do
-      printf "  %d) id=%s  type=%s  | %s\n" "$((i+1))" "${ids[$i]}" "${types[$i]}" "${items[$i]}"
+  # 3) 선택 UI (또는 수동입력)
+  if [ "${#lines[@]}" -gt 0 ]; then
+    echo "Found ${#lines[@]} drive(s):"
+    for ((i=0;i<${#lines[@]};i++)); do
+      IFS=$'\t' read -r did dtype dname <<<"${lines[$i]}"
+      printf "  %d) id=%s  type=%s  name=%s\n" "$((i+1))" "$did" "$dtype" "${dname:-?}"
     done
     while true; do
-      read -r -p "Pick a number (1-$count), or press Enter to cancel: " choice || true
+      read -r -p "Pick a number (1-${#lines[@]}), or press Enter to cancel: " choice || true
       [ -z "$choice" ] && return 1
-      if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
-        idx=$((choice-1))
-        id="${ids[$idx]}"
-        type="${types[$idx]}"
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#lines[@]}" ]; then
+        IFS=$'\t' read -r id type _ <<<"${lines[$((choice-1))]}"
         break
       fi
     done
+  else
+    echo "Could not parse drive list automatically."
+    read -r -p "Enter drive_id manually: " id
+    read -r -p "Enter drive_type (personal|business|documentLibrary): " type
   fi
 
-  # >>> FIXED: close test brackets before then
   if [ -z "${id:-}" ] || [ -z "${type:-}" ]; then
     echo "Empty id/type; canceled."
     return 1
   fi
 
-  echo "Writing drive_id/drive_type into: $path"
+  echo "Writing drive_id/drive_type into: $conf"
   sudo awk -v sec="${FIXED_REMOTE}" -v id="$id" -v typ="$type" '
     BEGIN{ insec=0; has_id=0; has_type=0 }
     /^\[.*\]$/ {
@@ -420,13 +427,13 @@ select_onedrive_drive() {
         if (has_type==0) print "drive_type = " typ
       }
     }
-  ' "$path" | sudo tee "$path.tmp" >/dev/null
+  ' "$conf" | sudo tee "${conf}.tmp" >/dev/null
 
-  sudo mv "$path.tmp" "$path"
-  sudo chown "$user":"$user" "$path"
-  sudo chmod 600 "$path"
+  sudo mv "${conf}.tmp" "$conf"
+  sudo chown "$user":"$user" "$conf"
+  sudo chmod 600 "$conf"
+
   echo "Updated. drive_id=${id}, drive_type=${type}"
-
   echo "Testing access with new drive_id/type..."
   if sudo -u "$user" rclone lsd "${FIXED_REMOTE}:" >/dev/null 2>&1; then
     echo "OK: drive selection works."
