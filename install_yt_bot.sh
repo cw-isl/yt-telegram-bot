@@ -336,12 +336,14 @@ EOT
   echo "Testing 'rclone about ${FIXED_REMOTE}:' ..."
   if sudo -u "$user" rclone about "${FIXED_REMOTE}:" >/dev/null 2>&1; then
     echo "OK: rclone can access OneDrive."
-    echo
-    echo "Now we'll list available drives and let you pick one."
-    select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
   else
-    echo "WARN: rclone test failed. Double-check the token or run 'rclone config'."
+    echo "NOTE: 'about' failed. This is 보통 드라이브를 아직 못 골라서 그래요."
   fi
+
+  echo
+  echo "Now we'll list available drives and let you pick one."
+  # ⬇️ 저장 후 **항상** 드라이브 선택으로 진입
+  select_onedrive_drive || echo "Drive selection skipped/failed; you can rerun it later."
 }
 
 # --- List & choose drive_id/drive_type, then write into rclone.conf
