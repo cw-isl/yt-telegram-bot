@@ -311,9 +311,22 @@ rclone_conf_path() {
   echo "$home/.config/rclone/rclone.conf"
 }
 
+# --- rclone.conf에서 token JSON의 access_token을 꺼내는 헬퍼 ---
+get_access_token_from_conf() {
+  local conf="$1"
+  local token_json
+  token_json="$(awk -v sec="[$FIXED_REMOTE]" '
+    $0==sec {ins=1; next}
+    /^\[.*\]$/ {if(ins) exit; next}
+    ins && $1=="token" && $2=="=" {sub(/^[^=]*=[[:space:]]*/,""); print; exit}
+  ' "$conf" 2>/dev/null || true)"
+  [ -z "${token_json:-}" ] && { echo ""; return 1; }
+  jq -r '.access_token // empty' <<<"$token_json"
+}
+
 write_onedrive_token() {
-  local conf path dir user home token
-  user="$(svc_user)"; home="$(svc_home)"
+  local path dir user token
+  user="$(svc_user)"
   path="$(rclone_conf_path)"; dir="$(dirname "$path")"
   sudo -u "$user" mkdir -p "$dir"
   echo
@@ -348,17 +361,17 @@ EOT
 
 # --- List & choose drive_id/drive_type, then write into rclone.conf
 select_onedrive_drive() {
-  local user home conf lines i choice id type
-  user="$(svc_user)"; home="$(svc_home)"
+  local user conf
+  user="$(svc_user)"
   conf="$(rclone_conf_path)"
 
   echo "Querying drives via: rclone backend drives ${FIXED_REMOTE}:"
 
   # 1) JSON 출력 우선 시도 (신형 rclone)
+  local -a lines
   lines=()
   if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
     if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
-      echo "Found drives (JSON)."
       mapfile -t lines < <(jq -r '.drives[] | "\(.id)\t\(.driveType)\t\(.name // "")"' /tmp/ytb_drives.json)
     fi
   fi
@@ -367,35 +380,58 @@ select_onedrive_drive() {
   if [ "${#lines[@]}" -eq 0 ]; then
     if mapfile -t _raw < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
       declare -a parsed; parsed=()
+      local ln _id _type _name
       for ln in "${_raw[@]}"; do
         _id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,\)]*).*/\1/p')"
         _type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]*).*/\1/p')"
         _name="$(echo "$ln" | sed -nE 's/.*name=([^,)]*).*/\1/p')"
-        if [ -n "$_id" ] && [ -n "$_type" ]; then
-          parsed+=("${_id}\t${_type}\t${_name}")
-        fi
+        [ -n "$_id" ] && [ -n "$_type" ] && parsed+=("${_id}\t${_type}\t${_name}")
       done
       lines=("${parsed[@]}")
     fi
   fi
 
-  # 3) 선택 UI (또는 수동입력)
+  # 3) Graph API 직접 호출 폴백 (access_token 추출 후 호출)
+  if [ "${#lines[@]}" -eq 0 ]; then
+    echo "rclone output parse failed; trying Microsoft Graph API directly..."
+    local access_token
+    access_token="$(get_access_token_from_conf "$conf" || true)"
+    if [ -n "${access_token:-}" ]; then
+      local tmp_json="/tmp/ytb_graph_drives_list.txt"
+      # me/drive (기본) + me/drives (전체)
+      {
+        curl -fsSL -H "Authorization: Bearer $access_token" \
+          "https://graph.microsoft.com/v1.0/me/drive?\$select=id,driveType,name" \
+          | jq -r '"\(.id // empty)\t\(.driveType // empty)\t\(.name // "")"'
+        curl -fsSL -H "Authorization: Bearer $access_token" \
+          "https://graph.microsoft.com/v1.0/me/drives?\$select=id,driveType,name" \
+          | jq -r '.value[]? | "\(.id // empty)\t\(.driveType // empty)\t\(.name // "")"'
+      } > "$tmp_json" 2>/dev/null || true
+      # 중복/빈행 제거
+      mapfile -t lines < <(awk 'NF && !seen[$0]++' "$tmp_json" 2>/dev/null || true)
+    else
+      echo "Could not read access_token from rclone.conf token JSON."
+    fi
+  fi
+
+  # === 선택 UI ===
+  local id type dname i choice
   if [ "${#lines[@]}" -gt 0 ]; then
     echo "Found ${#lines[@]} drive(s):"
     for ((i=0;i<${#lines[@]};i++)); do
-      IFS=$'\t' read -r did dtype dname <<<"${lines[$i]}"
-      printf "  %d) id=%s  type=%s  name=%s\n" "$((i+1))" "$did" "$dtype" "${dname:-?}"
+      IFS=$'\t' read -r id type dname <<<"${lines[$i]}"
+      printf "  %d) id=%s  type=%s  name=%s\n" "$((i+1))" "$id" "$type" "${dname:-?}"
     done
     while true; do
       read -r -p "Pick a number (1-${#lines[@]}), or press Enter to cancel: " choice || true
       [ -z "$choice" ] && return 1
       if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#lines[@]}" ]; then
-        IFS=$'\t' read -r id type _ <<<"${lines[$((choice-1))]}"
+        IFS=$'\t' read -r id type dname <<<"${lines[$((choice-1))]}"
         break
       fi
     done
   else
-    echo "Could not parse drive list automatically."
+    echo "Could not discover drives automatically."
     read -r -p "Enter drive_id manually: " id
     read -r -p "Enter drive_type (personal|business|documentLibrary): " type
   fi
@@ -422,7 +458,7 @@ select_onedrive_drive() {
       print
     }
     END {
-      if (insec==1) {
+      if (insec=1) {
         if (has_id==0)  print "drive_id = " id
         if (has_type==0) print "drive_type = " typ
       }
