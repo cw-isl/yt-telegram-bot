@@ -232,6 +232,105 @@ def safe_template(out_dir: Path) -> str:
     ts = kst_timestamp_prefix()
     return str(out_dir / f"{ts}-%(title).80B.%(ext)s")
 
+# ===================== Time & range helpers =====================
+def _parse_timecode(text: str) -> float:
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("empty timecode")
+    parts = text.split(":")
+    total = 0.0
+    for part in parts:
+        if part == "":
+            raise ValueError("invalid timecode segment")
+        try:
+            value = float(part)
+        except ValueError as e:
+            raise ValueError("invalid timecode number") from e
+        total = total * 60.0 + value
+    if total < 0:
+        raise ValueError("negative time not allowed")
+    return total
+
+def parse_time_range(expr: str) -> tuple[float, float | None]:
+    text = (expr or "").strip()
+    if not text:
+        raise ValueError("빈 입력")
+    low = text.lower()
+    if low in {"all", "full", "entire", "whole", "전체", "전체구간", "원본"}:
+        return 0.0, None
+    m = re.split(r"[~\-–—]", text, maxsplit=1)
+    if len(m) != 2:
+        raise ValueError("`시작~끝` 형식으로 입력하세요")
+    start_raw, end_raw = (m[0].strip(), m[1].strip())
+    start = 0.0 if start_raw == "" else _parse_timecode(start_raw)
+    end = None if end_raw == "" else _parse_timecode(end_raw)
+    if end is not None and end <= start:
+        raise ValueError("끝 시간이 시작 시간보다 커야 합니다")
+    return start, end
+
+def format_seconds_hms(sec: float) -> str:
+    if sec is None:
+        return "??:??:??"
+    if sec < 0:
+        sec = 0
+    total = int(sec)
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+def format_seconds_label(sec: float) -> str:
+    if sec < 0:
+        sec = 0
+    total = int(round(sec))
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}{m:02d}{s:02d}"
+
+def probe_media_duration(path: Path) -> float | None:
+    try:
+        rc, out, _ = run_cmd([
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ])
+        if rc != 0:
+            return None
+        return float(out.strip()) if out.strip() else None
+    except Exception:
+        return None
+
+def extract_media_segment(src: Path, dst: Path, start: float, end: float | None) -> Path | None:
+    if start < 0:
+        start = 0.0
+    duration = None if end is None else max(0.0, end - start)
+    dst.unlink(missing_ok=True)
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src)]
+    if duration is not None and duration > 0:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += ["-c", "copy", "-avoid_negative_ts", "1", "-movflags", "+faststart", str(dst)]
+    rc, _, _ = run_cmd(cmd)
+    if rc == 0 and dst.exists() and dst.stat().st_size > 0:
+        return dst
+
+    dst.unlink(missing_ok=True)
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src)]
+    if duration is not None and duration > 0:
+        cmd += ["-t", f"{duration:.3f}"]
+    cmd += [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "160k",
+        "-movflags", "+faststart", "-avoid_negative_ts", "1",
+        str(dst),
+    ]
+    rc, _, err = run_cmd(cmd)
+    if rc != 0 or not dst.exists() or dst.stat().st_size == 0:
+        log.error(f"Segment extraction failed: {err}")
+        return None
+    return dst
+
 # ===================== rclone helpers =====================
 def rclone_path(path: str) -> str:
     if not path: return f"{RCLONE_REMOTE}:"
@@ -634,6 +733,7 @@ def parse_cb_token(data: str):
 
 # ===== /env 상태 관리 =====
 PENDING_ENV_EDIT: dict[int, str] = {}  # chat_id -> varname
+PENDING_SMR_RANGE: dict[int, dict[str, str]] = {}  # chat_id -> {"remote_path": str}
 
 ENV_EDITABLE_KEYS = [
     "BOT_TOKEN",                 # ⚠️ 변경 후 재시작 필요
@@ -901,16 +1001,106 @@ def _with_tempdir(func):
             shutil.rmtree(workdir, ignore_errors=True)
     return _wrap
 
+def handle_rsm_file_selected(chat_id: int, remote_path: str):
+    PENDING_SMR_RANGE[chat_id] = {"remote_path": remote_path}
+    display_path = rclone_path(remote_path)
+    msg = (
+        f"선택한 파일: {display_path}\n"
+        "전사/요약할 구간을 `시작~끝` 형식으로 입력하세요.\n"
+        "예) 00:05:00~00:12:30  |  00:10:00~  (끝까지)\n"
+        "전체 파일은 `all` 또는 `full` 입력, 취소는 `/cancel` 또는 `취소`."
+    )
+    _send(chat_id, msg)
+
+@bot.message_handler(func=lambda m: m.chat.id in PENDING_SMR_RANGE and m.text)
+def handle_smr_range_input(m):
+    chat_id = m.chat.id
+    entry = PENDING_SMR_RANGE.get(chat_id)
+    if not entry:
+        return
+    text = m.text.strip()
+    if not text:
+        return
+    lowered = text.lower()
+    if text.startswith("/") and lowered not in {"/cancel", "/취소"}:
+        return  # allow 다른 명령어
+    if lowered in {"/cancel", "cancel"} or text in {"취소", "/취소"}:
+        PENDING_SMR_RANGE.pop(chat_id, None)
+        _send(chat_id, "SMR 입력을 취소했습니다.")
+        return
+    try:
+        start_sec, end_sec = parse_time_range(text)
+    except ValueError as e:
+        _send(chat_id, f"시간 형식 오류: {e}\n예) 00:05:00~00:12:30 또는 all")
+        return
+
+    PENDING_SMR_RANGE.pop(chat_id, None)
+    end_display = "END" if end_sec is None else format_seconds_hms(end_sec)
+    _send(chat_id, f"SMR: {format_seconds_hms(start_sec)} → {end_display} 구간 처리 시작")
+    _launch_smr_job(chat_id, entry["remote_path"], start_sec, end_sec)
+
+def _launch_smr_job(chat_id: int, remote_path: str, start: float, end: float | None):
+    threading.Thread(target=_execute_smr_job, args=(chat_id, remote_path, start, end), daemon=True).start()
+
 @_with_tempdir
-def handle_rsm_file_selected(workdir: Path, chat_id: int, remote_path: str):
-    _send(chat_id, f"SMR: downloading `{remote_path}` …")
+def _execute_smr_job(workdir: Path, chat_id: int, remote_path: str, start_sec: float, end_sec: float | None):
+    display_path = rclone_path(remote_path)
+    _send(chat_id, f"SMR: `{display_path}` 다운로드 중 …")
     local = rclone_download(remote_path, workdir)
     if not local:
         _send(chat_id, "Download failed."); return
+
+    duration = probe_media_duration(local)
+    start_val = max(0.0, start_sec)
+    end_val = end_sec
+    if duration is not None:
+        if start_val >= duration:
+            _send(chat_id, f"요청한 시작 시간이 영상 길이({format_seconds_hms(duration)})보다 길어요.")
+            return
+        if end_val is None or end_val > duration:
+            end_val = duration
+    if end_val is not None and end_val <= start_val:
+        _send(chat_id, "요청 구간이 너무 짧습니다.")
+        return
+
+    pretty_start = format_seconds_hms(start_val)
+    pretty_end = "END" if end_val is None else format_seconds_hms(end_val)
+    if end_val is not None:
+        seg_len = max(0.0, end_val - start_val)
+        seg_info = f" ({format_seconds_hms(seg_len)} 길이)"
+    else:
+        seg_info = ""
+
+    clip_path = local
+    need_clip = start_val > 0 or (end_val is not None and (duration is None or end_val < duration))
+    if need_clip:
+        _send(chat_id, f"구간 추출 중… {pretty_start} → {pretty_end}{seg_info}")
+        clip_dst = workdir / f"clip{local.suffix}"
+        clip = extract_media_segment(local, clip_dst, start_val, end_val)
+        if not clip:
+            _send(chat_id, "구간 추출에 실패했습니다.")
+            return
+        clip_path = clip
+    else:
+        _send(chat_id, f"전체 구간 처리 중… ({pretty_start} → {pretty_end})")
+
+    range_end_for_label = end_val if end_val is not None else (duration if duration is not None else None)
+    if range_end_for_label is None:
+        if start_val <= 0 and end_sec is None:
+            range_tag = "full"
+        else:
+            range_tag = f"{format_seconds_label(start_val)}-END"
+    elif start_val <= 0 and duration is not None and abs(range_end_for_label - duration) < 1.0:
+        range_tag = "full"
+    else:
+        range_tag = f"{format_seconds_label(start_val)}-{format_seconds_label(range_end_for_label)}"
+
+    name_base_raw = local.stem if range_tag == "full" else f"{local.stem}_{range_tag}"
+    name_base = sanitize_filename(name_base_raw)
+
     try:
         _send(chat_id, "Transcribing…")
-        tx = transcribe_file(local)
-        name_base = sanitize_filename(local.stem)
+        tx = transcribe_file(clip_path)
         tr = workdir / f"{name_base}.txt"
         tr.write_text(tx, encoding="utf-8")
         rclone_upload(tr, RCLONE_FOLDER_TRANSCRIPTS)
@@ -919,7 +1109,13 @@ def handle_rsm_file_selected(workdir: Path, chat_id: int, remote_path: str):
         smp = workdir / f"{name_base}.summary.txt"
         smp.write_text(sm, encoding="utf-8")
         rclone_upload(smp, RCLONE_FOLDER_TRANSCRIPTS)
-        _send(chat_id, "Done. Transcript & summary uploaded.")
+        final_msg = (
+            "완료 ✅ 전사 & 요약 업로드됨.\n"
+            f"- 전사 파일: {tr.name}\n"
+            f"- 요약 파일: {smp.name}\n"
+            f"구간: {pretty_start} → {pretty_end}{seg_info}"
+        )
+        _send(chat_id, final_msg)
     except Exception as e:
         _send(chat_id, f"SMR failed: {e}")
 
