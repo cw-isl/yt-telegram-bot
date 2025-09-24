@@ -194,9 +194,35 @@ def _merged_env():
         merged_env["RCLONE_CONFIG"] = str(RCLONE_CONF_PATH)
     return merged_env
 
+TELEGRAM_MESSAGE_LIMIT = 4096
+
 def _send(chat_id: int, text: str):
     try: bot.send_message(chat_id, text)
     except Exception: pass
+
+def _send_long(chat_id: int, text: str, limit: int = TELEGRAM_MESSAGE_LIMIT):
+    text = (text or "").strip()
+    if not text:
+        return
+    max_len = max(1, min(limit, TELEGRAM_MESSAGE_LIMIT))
+    remaining = text
+    while remaining:
+        if len(remaining) <= max_len:
+            _send(chat_id, remaining)
+            break
+        split_idx = remaining.rfind("\n", 0, max_len)
+        if split_idx == -1:
+            split_idx = remaining.rfind(" ", 0, max_len)
+        if split_idx == -1 or split_idx == 0:
+            split_idx = max_len
+        chunk = remaining[:split_idx].rstrip()
+        if not chunk:
+            chunk = remaining[:max_len]
+            remaining = remaining[max_len:]
+        else:
+            remaining = remaining[split_idx:]
+        _send(chat_id, chunk)
+        remaining = remaining.lstrip()
 
 def run_cmd(cmd, cwd=None, timeout=None, env=None):
     merged_env = _merged_env()
@@ -657,6 +683,11 @@ def process_pipeline(url: str, chat_id: int, do_transcribe: bool, do_summary: bo
                 sm_path = workdir / f"{name_base}.summary.txt"
                 sm_path.write_text(summary, encoding="utf-8")
                 rclone_upload(sm_path, RCLONE_FOLDER_TRANSCRIPTS)
+                display = summary.strip()
+                if display:
+                    _send_long(chat_id, f"요약 결과:\n{display}")
+                else:
+                    _send(chat_id, "요약 결과가 비어 있습니다.")
                 _send(chat_id, "Done. Transcript & summary uploaded.")
             else:
                 _send(chat_id, "Done. Transcript uploaded.")
