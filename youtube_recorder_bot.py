@@ -451,11 +451,17 @@ def rclone_download(remote_file: str, local_dir: Path) -> Path | None:
 # ===================== yt-dlp helpers =====================
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".ts", ".m4v"}
 
+def _yt_extractor_args(use_android_client: bool) -> list[str]:
+    return ["--extractor-args", "youtube:player_client=android"] if use_android_client else []
+
+
 def yt_info(url: str) -> dict | None:
-    rc, out, _ = run_cmd(["yt-dlp", "-J", url], timeout=30)
-    if rc == 0 and out.strip():
-        try: return json.loads(out)
-        except Exception: return None
+    for use_android in (False, True):
+        cmd = ["yt-dlp", "-J", *_yt_extractor_args(use_android), url]
+        rc, out, _ = run_cmd(cmd, timeout=30)
+        if rc == 0 and out.strip():
+            try: return json.loads(out)
+            except Exception: return None
     return None
 
 def detect_live(url: str) -> bool:
@@ -469,8 +475,8 @@ def detect_live(url: str) -> bool:
     live = live or pattern
     return live
 
-def _yt_common_opts():
-    return [
+def _yt_common_opts(use_android_client: bool = False):
+    opts = [
         "--no-progress", "-N", "8", "--http-chunk-size", "10M",
         "--hls-prefer-ffmpeg",
         "--no-keep-fragments",
@@ -479,13 +485,18 @@ def _yt_common_opts():
         "--remux-video", "mp4", "--merge-output-format", "mp4",
         "--postprocessor-args", "ffmpeg:-movflags +faststart -bsf:a aac_adtstoasc",
     ]
+    opts.extend(_yt_extractor_args(use_android_client))
+    return opts
 
 def yt_download(url: str, out_dir: Path) -> Path | None:
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
     rc, _, err = run_cmd(["yt-dlp", *(_yt_common_opts()), "-o", tmpl, url])
     if rc != 0:
-        log.error(err); return None
+        log.warning(f"primary yt-dlp run failed, retrying with android client: {err}")
+        rc, _, err = run_cmd(["yt-dlp", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url])
+        if rc != 0:
+            log.error(err); return None
     vids = [p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
     vids.sort(key=lambda x: x.stat().st_mtime)
     return vids[-1] if vids else None
@@ -493,7 +504,7 @@ def yt_download(url: str, out_dir: Path) -> Path | None:
 def yt_record_live(url: str, out_dir: Path) -> subprocess.Popen | None:
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
-    cmd = ["yt-dlp", "--no-part", "--live-from-start", *(_yt_common_opts()), "-o", tmpl, url]
+    cmd = ["yt-dlp", "--no-part", "--live-from-start", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url]
     try:
         return popen_cmd(cmd)
     except Exception as e:
