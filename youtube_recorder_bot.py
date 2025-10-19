@@ -451,13 +451,17 @@ def rclone_download(remote_file: str, local_dir: Path) -> Path | None:
 # ===================== yt-dlp helpers =====================
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".ts", ".m4v"}
 
+def _yt_bin() -> list[str]:
+    """Return the base yt-dlp invocation with custom plugins disabled."""
+    return ["yt-dlp", "--no-plugins"]
+
 def _yt_extractor_args(use_android_client: bool) -> list[str]:
     return ["--extractor-args", "youtube:player_client=android"] if use_android_client else []
 
 
 def yt_info(url: str) -> dict | None:
     for use_android in (False, True):
-        cmd = ["yt-dlp", "-J", *_yt_extractor_args(use_android), url]
+        cmd = [*_yt_bin(), "-J", *_yt_extractor_args(use_android), url]
         rc, out, _ = run_cmd(cmd, timeout=30)
         if rc == 0 and out.strip():
             try: return json.loads(out)
@@ -491,10 +495,10 @@ def _yt_common_opts(use_android_client: bool = False):
 def yt_download(url: str, out_dir: Path) -> Path | None:
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
-    rc, _, err = run_cmd(["yt-dlp", *(_yt_common_opts()), "-o", tmpl, url])
+    rc, _, err = run_cmd([*_yt_bin(), *(_yt_common_opts()), "-o", tmpl, url])
     if rc != 0:
         log.warning(f"primary yt-dlp run failed, retrying with android client: {err}")
-        rc, _, err = run_cmd(["yt-dlp", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url])
+        rc, _, err = run_cmd([*_yt_bin(), *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url])
         if rc != 0:
             log.error(err); return None
     vids = [p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
@@ -504,7 +508,7 @@ def yt_download(url: str, out_dir: Path) -> Path | None:
 def yt_record_live(url: str, out_dir: Path) -> subprocess.Popen | None:
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
-    cmd = ["yt-dlp", "--no-part", "--live-from-start", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url]
+    cmd = [*_yt_bin(), "--no-part", "--live-from-start", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url]
     try:
         return popen_cmd(cmd)
     except Exception as e:
