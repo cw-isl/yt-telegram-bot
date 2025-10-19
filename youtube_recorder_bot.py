@@ -459,7 +459,29 @@ def _yt_extractor_args(use_android_client: bool) -> list[str]:
     return ["--extractor-args", "youtube:player_client=android"] if use_android_client else []
 
 
+YT_VIDEO_ID_RE = re.compile(r"(?i)(?:v=|/live/|/shorts/|youtu\.be/)([0-9A-Za-z_-]{11})")
+
+
+def normalize_youtube_url(url: str) -> str:
+    """Convert common YouTube URL variants to a canonical watch?v= form."""
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return url
+    if not parsed.scheme or not parsed.netloc:
+        return url
+    host = parsed.netloc.lower()
+    if "youtube.com" not in host and "youtu.be" not in host:
+        return url
+    m = YT_VIDEO_ID_RE.search(url)
+    if not m:
+        return url
+    video_id = m.group(1)
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
 def yt_info(url: str) -> dict | None:
+    url = normalize_youtube_url(url)
     for use_android in (False, True):
         cmd = [*_yt_bin(), "-J", *_yt_extractor_args(use_android), url]
         rc, out, _ = run_cmd(cmd, timeout=30)
@@ -468,16 +490,51 @@ def yt_info(url: str) -> dict | None:
             except Exception: return None
     return None
 
+
+def _yt_primary_node(info: dict | None) -> dict | None:
+    if not isinstance(info, dict):
+        return None
+    if "entries" in info and isinstance(info["entries"], list):
+        for entry in info["entries"]:
+            if isinstance(entry, dict):
+                return entry
+        return None
+    return info
+
 def detect_live(url: str) -> bool:
     info = yt_info(url); live = False
-    if isinstance(info, dict):
-        node = info.get("entries", [None])[0] if "entries" in info else info
-        if isinstance(node, dict) and node.get("is_live") is True:
-            live = True
+    node = _yt_primary_node(info)
+    if isinstance(node, dict):
+        status = str(node.get("live_status", "")).lower()
+        if status == "is_live":
+            return True
+        if status in {"is_upcoming", "was_live", "post_live", "not_live"}:
+            return False
+        if node.get("is_live") is True:
+            return True
     # 🔧 BUGFIX: 예전 코드의 'live = True or live' → 항상 True가 되어버림
+    # URL 패턴은 정보 조회에 실패했을 때의 최후 보조 판단으로만 사용한다.
     pattern = ("/live/" in url.lower()) or ("watch?v=" in url.lower() and "live" in url.lower())
-    live = live or pattern
+    live = live or (pattern and info is None)
     return live
+
+
+def wait_for_youtube_live(url: str, timeout: float = 900.0, poll: float = 5.0) -> bool:
+    """Poll until the live stream actually provides media streams."""
+    end_time = time.time() + max(0.0, timeout)
+    url = normalize_youtube_url(url)
+    while True:
+        info = yt_info(url)
+        node = _yt_primary_node(info)
+        if isinstance(node, dict):
+            status = str(node.get("live_status", "")).lower()
+            if status == "is_live":
+                return True
+            if status in {"post_live", "was_live", "not_live"}:
+                return False
+        if time.time() >= end_time:
+            return False
+        time.sleep(max(1.0, poll))
 
 def _yt_common_opts(use_android_client: bool = False):
     opts = [
@@ -493,6 +550,7 @@ def _yt_common_opts(use_android_client: bool = False):
     return opts
 
 def yt_download(url: str, out_dir: Path) -> Path | None:
+    url = normalize_youtube_url(url)
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
     rc, _, err = run_cmd([*_yt_bin(), *(_yt_common_opts()), "-o", tmpl, url])
@@ -506,6 +564,7 @@ def yt_download(url: str, out_dir: Path) -> Path | None:
     return vids[-1] if vids else None
 
 def yt_record_live(url: str, out_dir: Path) -> subprocess.Popen | None:
+    url = normalize_youtube_url(url)
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
     cmd = [*_yt_bin(), "--no-part", "--live-from-start", *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url]
@@ -668,6 +727,7 @@ recording_procs = {}     # chat_id -> subprocess.Popen
 STOP_LOCK = BOT_HOME / ".stop.lock"
 
 def process_pipeline(url: str, chat_id: int, do_transcribe: bool, do_summary: bool):
+    url = normalize_youtube_url(url)
     if detect_live(url):  # 라이브는 여기선 다운로드만
         do_transcribe = False; do_summary = False
     job = {"status": "downloading", "url": url}
@@ -712,18 +772,26 @@ def process_pipeline(url: str, chat_id: int, do_transcribe: bool, do_summary: bo
         job["status"] = "idle"
 
 def start_live_record(chat_id: int, url: str):
+    url = normalize_youtube_url(url)
     if chat_id in recording_procs and recording_procs[chat_id] and recording_procs[chat_id].poll() is None:
         _send(chat_id, "Live recording already running."); return
-    if not detect_live(url):
-        _send(chat_id, "Not detected as live. Running normal download.")
-        threading.Thread(target=process_pipeline, args=(url, chat_id, False, False), daemon=True).start(); return
-    outdir = BOT_HOME / "recordings"
-    p = yt_record_live(url, outdir)
-    if p:
-        recording_procs[chat_id] = p
-        _send(chat_id, "Recording live… Use /stop to finish and upload.")
-    else:
-        _send(chat_id, "Failed to start live recording.")
+
+    def _launch():
+        if not detect_live(url):
+            _send(chat_id, "Live stream offline. Waiting for it to start…")
+            if not wait_for_youtube_live(url):
+                _send(chat_id, "Live stream did not start in time. Running normal download.")
+                process_pipeline(url, chat_id, False, False)
+                return
+        outdir = BOT_HOME / "recordings"
+        p = yt_record_live(url, outdir)
+        if p:
+            recording_procs[chat_id] = p
+            _send(chat_id, "Recording live… Use /stop to finish and upload.")
+        else:
+            _send(chat_id, "Failed to start live recording.")
+
+    threading.Thread(target=_launch, daemon=True).start()
 
 def stop_live_record(chat_id: int):
     try:
