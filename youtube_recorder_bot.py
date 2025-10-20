@@ -7,7 +7,7 @@ from datetime import datetime
 """
 CHANGES (by helper):
 - Force rclone config to /home/file/.rclone.conf (copy from autodetected if needed)
-- Fix detect_live() boolean bug
+- Improve YouTube live detection & waiting logic (handles upcoming streams reliably)
 - Search multiple candidate recording dirs when stopping/status (handles legacy /root/yt-bot/recordings)
 - Inject uniform env into Popen (yt-dlp)
 - Provide minimal implementations for _kb_providers/_kb_models/handle_* callbacks
@@ -44,6 +44,16 @@ RCLONE_FOLDER_TRANSCRIPTS = os.environ.get("RCLONE_FOLDER_TRANSCRIPTS", "YouTube
 # whisper
 WHISPER_MODEL  = os.environ.get("WHISPER_MODEL", "small").strip()
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto").strip()
+
+# live wait behaviour
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, str(default)))
+    except Exception:
+        return default
+
+LIVE_WAIT_TIMEOUT = _env_float("LIVE_WAIT_TIMEOUT", 14400.0)  # 기본 4시간 대기
+LIVE_WAIT_POLL = _env_float("LIVE_WAIT_POLL", 10.0)           # 10초 간격
 
 # summary engines
 SUMMARY_ENGINE = os.environ.get("SUMMARY_ENGINE", "gemini").strip().lower()
@@ -501,38 +511,56 @@ def _yt_primary_node(info: dict | None) -> dict | None:
         return None
     return info
 
-def detect_live(url: str) -> bool:
-    info = yt_info(url); live = False
+LIVE_STATUS_LIVE = {"is_live"}
+LIVE_STATUS_WAITABLE = {"is_upcoming"}
+LIVE_STATUS_FINISHED = {"post_live", "was_live", "not_live"}
+
+def _live_status_from_info(info) -> str:
     node = _yt_primary_node(info)
-    if isinstance(node, dict):
-        status = str(node.get("live_status", "")).lower()
-        if status == "is_live":
-            return True
-        if status in {"is_upcoming", "was_live", "post_live", "not_live"}:
-            return False
-        if node.get("is_live") is True:
-            return True
-    # 🔧 BUGFIX: 예전 코드의 'live = True or live' → 항상 True가 되어버림
-    # URL 패턴은 정보 조회에 실패했을 때의 최후 보조 판단으로만 사용한다.
-    pattern = ("/live/" in url.lower()) or ("watch?v=" in url.lower() and "live" in url.lower())
-    live = live or (pattern and info is None)
-    return live
+    for source in (node, info):
+        if isinstance(source, dict):
+            status = str(source.get("live_status", "") or "").lower().strip()
+            if status in LIVE_STATUS_LIVE:
+                return "live"
+            if status in LIVE_STATUS_WAITABLE:
+                return "upcoming"
+            if status in LIVE_STATUS_FINISHED:
+                return "finished"
+            if source.get("is_live") is True:
+                return "live"
+    if isinstance(info, dict):
+        return "vod"
+    return "unknown"
+
+def youtube_live_status(url: str) -> str:
+    info = yt_info(url)
+    state = _live_status_from_info(info)
+    if state == "unknown":
+        pattern = ("/live/" in url.lower()) or ("watch?v=" in url.lower() and "live" in url.lower())
+        if pattern and info is None:
+            return "upcoming"
+    return state
+
+def detect_live(url: str) -> bool:
+    state = youtube_live_status(url)
+    if state in {"live", "upcoming"}:
+        return True
+    if state in {"finished", "vod"}:
+        return False
+    return False
 
 
-def wait_for_youtube_live(url: str, timeout: float = 900.0, poll: float = 5.0) -> bool:
+def wait_for_youtube_live(url: str, timeout: float = LIVE_WAIT_TIMEOUT, poll: float = LIVE_WAIT_POLL) -> bool:
     """Poll until the live stream actually provides media streams."""
-    end_time = time.time() + max(0.0, timeout)
+    deadline = None if timeout is None or timeout <= 0 else (time.time() + timeout)
     url = normalize_youtube_url(url)
     while True:
-        info = yt_info(url)
-        node = _yt_primary_node(info)
-        if isinstance(node, dict):
-            status = str(node.get("live_status", "")).lower()
-            if status == "is_live":
-                return True
-            if status in {"post_live", "was_live", "not_live"}:
-                return False
-        if time.time() >= end_time:
+        state = youtube_live_status(url)
+        if state == "live":
+            return True
+        if state in {"finished", "vod"}:
+            return False
+        if deadline is not None and time.time() >= deadline:
             return False
         time.sleep(max(1.0, poll))
 
@@ -777,12 +805,33 @@ def start_live_record(chat_id: int, url: str):
         _send(chat_id, "Live recording already running."); return
 
     def _launch():
-        if not detect_live(url):
-            _send(chat_id, "Live stream offline. Waiting for it to start…")
-            if not wait_for_youtube_live(url):
-                _send(chat_id, "Live stream did not start in time. Running normal download.")
-                process_pipeline(url, chat_id, False, False)
-                return
+        state = youtube_live_status(url)
+        if state in {"finished", "vod"}:
+            _send(chat_id, "라이브가 진행 중이 아닙니다. 다시보기(또는 일반 영상) 다운로드를 진행합니다.")
+            process_pipeline(url, chat_id, False, False)
+            return
+        if state != "live":
+            if LIVE_WAIT_TIMEOUT and LIVE_WAIT_TIMEOUT > 0:
+                wait_label = f"{int(LIVE_WAIT_TIMEOUT // 60)}분"
+            else:
+                wait_label = "무제한"
+            _send(chat_id, f"라이브 시작 대기 중… (최대 {wait_label})")
+            if wait_for_youtube_live(url):
+                state = "live"
+            else:
+                # 마지막으로 한 번 더 상태 확인
+                state_after = youtube_live_status(url)
+                if state_after == "live":
+                    state = "live"
+                elif state_after in {"finished", "vod"}:
+                    _send(chat_id, "라이브가 시작되지 않았거나 이미 종료되었습니다. 다시보기 다운로드를 시도합니다.")
+                    process_pipeline(url, chat_id, False, False)
+                    return
+                else:
+                    _send(chat_id, "라이브 시작을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.")
+                    return
+        if state == "live":
+            _send(chat_id, "라이브 진행 중 감지! 처음부터 녹화를 시작합니다.")
         outdir = BOT_HOME / "recordings"
         p = yt_record_live(url, outdir)
         if p:
