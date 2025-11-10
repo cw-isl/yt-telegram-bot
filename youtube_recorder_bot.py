@@ -461,6 +461,15 @@ def rclone_download(remote_file: str, local_dir: Path) -> Path | None:
 # ===================== yt-dlp helpers =====================
 VIDEO_EXTS = {".mp4", ".mkv", ".webm", ".ts", ".m4v"}
 
+
+def _ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
+def _ffprobe_available() -> bool:
+    return shutil.which("ffprobe") is not None
+
+
 def _yt_bin() -> list[str]:
     """Return the base yt-dlp invocation with custom plugins disabled."""
     return ["yt-dlp", "--no-plugins"]
@@ -564,32 +573,65 @@ def wait_for_youtube_live(url: str, timeout: float = LIVE_WAIT_TIMEOUT, poll: fl
             return False
         time.sleep(max(1.0, poll))
 
-def _yt_common_opts(use_android_client: bool = False):
+def _yt_common_opts(use_android_client: bool = False, allow_ffmpeg: bool | None = None):
+    if allow_ffmpeg is None:
+        allow_ffmpeg = _ffmpeg_available()
     opts = [
         "--no-progress", "-N", "8", "--http-chunk-size", "10M",
-        "--hls-prefer-ffmpeg",
         "--no-keep-fragments",
-        "--downloader-args", "ffmpeg:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2",
         "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/best",
-        "--remux-video", "mp4", "--merge-output-format", "mp4",
-        "--postprocessor-args", "ffmpeg:-movflags +faststart -bsf:a aac_adtstoasc",
     ]
+    if allow_ffmpeg:
+        opts.extend([
+            "--hls-prefer-ffmpeg",
+            "--downloader-args", "ffmpeg:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2",
+            "--remux-video", "mp4", "--merge-output-format", "mp4",
+            "--postprocessor-args", "ffmpeg:-movflags +faststart -bsf:a aac_adtstoasc",
+        ])
     opts.extend(_yt_extractor_args(use_android_client))
     return opts
+
+
+def _looks_like_ffmpeg_error(err: str) -> bool:
+    low = (err or "").lower()
+    return any(token in low for token in ("ffmpeg", "ffprobe", "postprocessing", "post-processing"))
 
 def yt_download(url: str, out_dir: Path) -> Path | None:
     url = normalize_youtube_url(url)
     ensure_dir(out_dir)
     tmpl = safe_template(out_dir)
-    rc, _, err = run_cmd([*_yt_bin(), *(_yt_common_opts()), "-o", tmpl, url])
-    if rc != 0:
-        log.warning(f"primary yt-dlp run failed, retrying with android client: {err}")
-        rc, _, err = run_cmd([*_yt_bin(), *(_yt_common_opts(use_android_client=True)), "-o", tmpl, url])
-        if rc != 0:
-            log.error(err); return None
-    vids = [p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
-    vids.sort(key=lambda x: x.stat().st_mtime)
-    return vids[-1] if vids else None
+    prefer_ffmpeg = _ffmpeg_available()
+    ffmpeg_choices = (True, False) if prefer_ffmpeg else (False,)
+    attempts: list[tuple[bool, bool]] = []
+    for use_android in (False, True):
+        for allow_ffmpeg in ffmpeg_choices:
+            attempts.append((use_android, allow_ffmpeg))
+
+    last_err = ""
+    for idx, (use_android, allow_ffmpeg) in enumerate(attempts):
+        cmd = [*_yt_bin(), *(_yt_common_opts(use_android_client=use_android, allow_ffmpeg=allow_ffmpeg)), "-o", tmpl, url]
+        rc, _, err = run_cmd(cmd)
+        if rc == 0:
+            vids = [p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() in VIDEO_EXTS]
+            vids.sort(key=lambda x: x.stat().st_mtime)
+            if vids:
+                return vids[-1]
+            last_err = "yt-dlp reported success but produced no files"
+            log.warning(last_err)
+            continue
+
+        last_err = err
+        has_next = idx < len(attempts) - 1
+        if has_next:
+            if allow_ffmpeg and _looks_like_ffmpeg_error(err):
+                log.warning("yt-dlp failed due to ffmpeg error; retrying without ffmpeg pipeline: %s", err)
+            else:
+                client = "android" if use_android else "default"
+                mode = "with" if allow_ffmpeg else "without"
+                log.warning("yt-dlp %s client (%s ffmpeg) failed, retrying: %s", client, mode, err)
+    if last_err:
+        log.error(last_err)
+    return None
 
 def yt_record_live(url: str, out_dir: Path) -> subprocess.Popen | None:
     url = normalize_youtube_url(url)
@@ -639,6 +681,8 @@ def _pick_latest_video_across(paths: list[Path], min_size_mb: float = 5.0) -> tu
 
 # ---- remux safety ----
 def ensure_mp4_faststart(src: Path) -> Path:
+    if not (_ffmpeg_available() and _ffprobe_available()):
+        return src
     try:
         rc, out, _ = run_cmd(["ffprobe","-v","error","-show_entries","format=format_name","-of","default=nw=1:nk=1",str(src)])
         fmt = (out or "").strip().lower() if rc == 0 else ""
