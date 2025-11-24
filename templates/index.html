@@ -1,0 +1,168 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-6">
+    <div class="section-card h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>1. 유튜브 영상녹화</h4>
+        <span class="badge rounded-pill bg-primary">ChatGPT 단일 엔진</span>
+      </div>
+      <form method="post" action="{{ url_for('record_action') }}" class="mb-3">
+        <h6 class="mb-2">라이브 녹화</h6>
+        <div class="btn-group" role="group">
+          <button class="btn btn-outline-primary" name="action" value="녹화 시작">녹화 시작</button>
+          <button class="btn btn-outline-secondary" name="action" value="일시정지">일시정지</button>
+          <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
+          <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
+        </div>
+      </form>
+
+      <form method="post" action="{{ url_for('record_action') }}">
+        <h6 class="mb-2">링크 다운로드</h6>
+        <div class="input-group mb-2">
+          <input name="video_url" type="url" class="form-control" placeholder="https://www.youtube.com/..." required />
+          <button class="btn btn-primary" name="action" value="download">다운로드</button>
+          <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
+        </div>
+        <p class="text-muted small mb-0">ffmpeg 유무와 상관없이 다운로드를 시도한 후 지정 경로로 업로드합니다.</p>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-6" id="transcript">
+    <div class="section-card h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>2. 전사 및 요약</h4>
+        <span class="badge bg-light text-dark">진행률 실시간 표시</span>
+      </div>
+
+      <form method="post" action="{{ url_for('transcript_action') }}" class="mb-4">
+        <div class="d-flex justify-content-between mb-2">
+          <h6 class="mb-0">전사</h6>
+          <small class="text-muted">자동 업로드: {{ settings.paths.transcript_upload }}</small>
+        </div>
+        <div class="row g-2 align-items-center">
+          <div class="col-md-8">
+            <select class="form-select" name="file_name">
+              {% for cat in categories %}
+              <optgroup label="{{ cat.name }}">
+                {% for f in cat.files %}
+                <option>{{ f }}</option>
+                {% endfor %}
+              </optgroup>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4 d-grid">
+            <button class="btn btn-primary">전사 시작</button>
+          </div>
+        </div>
+        <div class="progress mt-2">
+          <div class="progress-bar {{ jobs.transcript.active|percent_class }}" style="width: {{ jobs.transcript.active }}%"></div>
+        </div>
+      </form>
+
+      <form method="post" action="{{ url_for('summary_action') }}">
+        <div class="d-flex justify-content-between mb-2">
+          <h6 class="mb-0">요약</h6>
+          <small class="text-muted">자동 업로드: {{ settings.paths.summary_upload }}</small>
+        </div>
+        <div class="row g-2 align-items-center">
+          <div class="col-md-8">
+            <select class="form-select" name="file_name">
+              {% for cat in categories %}
+              <optgroup label="{{ cat.name }}">
+                {% for f in cat.files %}
+                <option>{{ f }}</option>
+                {% endfor %}
+              </optgroup>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4 d-grid">
+            <button class="btn btn-success">요약 시작</button>
+          </div>
+        </div>
+        <div class="progress mt-2">
+          <div class="progress-bar {{ jobs.summary.active|percent_class }}" style="width: {{ jobs.summary.active }}%"></div>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-2" id="settings">
+  <div class="col-12">
+    <div class="section-card">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>3. 설정</h4>
+        <span class="badge bg-info text-dark">업로드 경로 &amp; 권한</span>
+      </div>
+      <form method="post" action="{{ url_for('settings_action') }}" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">다운로드/녹화 저장 위치</label>
+          <input class="form-control" name="downloads" value="{{ settings.paths.downloads }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">녹화 원본 저장</label>
+          <input class="form-control" name="recordings" value="{{ settings.paths.recordings }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">전사 저장 위치</label>
+          <input class="form-control" name="transcripts" value="{{ settings.paths.transcripts }}" />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">요약 저장 위치</label>
+          <input class="form-control" name="summaries" value="{{ settings.paths.summaries }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">전사 업로드 경로 (OneDrive)</label>
+          <input class="form-control" name="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">요약 업로드 경로 (OneDrive)</label>
+          <input class="form-control" name="summary_upload" value="{{ settings.paths.summary_upload }}" />
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">일반 업로드 경로</label>
+          <input class="form-control" name="onedrive_upload" value="{{ settings.paths.onedrive_upload }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">ChatGPT 토큰</label>
+          <input class="form-control" name="chatgpt_token" value="{{ settings.auth.chatgpt_token }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">원드라이브 계정</label>
+          <input class="form-control" name="onedrive_account" value="{{ settings.auth.onedrive_account }}" />
+        </div>
+
+        <div class="col-12 d-flex justify-content-between align-items-center">
+          <div>
+            <span class="badge bg-light text-dark">자동 업로드</span>
+            <small class="text-muted ms-2">전사/요약 완료 후 OneDrive로 바로 반영됩니다.</small>
+          </div>
+          <button class="btn btn-primary">설정 저장</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mt-2">
+  <div class="col-12">
+    <div class="section-card">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h6 class="mb-0">추천 기능</h6>
+        <span class="badge bg-secondary">추가 아이디어</span>
+      </div>
+      <ul class="mb-0">
+        <li>원드라이브 업로드 히스토리 로그 제공</li>
+        <li>짧은 요약/긴 요약/하이라이트 3단 요약 옵션</li>
+        <li>작업 실패 시 자동 재시도 및 이메일 알림</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

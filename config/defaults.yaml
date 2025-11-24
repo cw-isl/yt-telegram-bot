@@ -1,0 +1,33 @@
+{
+  "paths": {
+    "recordings": "recordings",
+    "downloads": "downloads",
+    "transcripts": "transcripts",
+    "summaries": "summaries",
+    "onedrive_upload": "oneDrive/yt-bot",
+    "transcript_upload": "oneDrive/yt-bot/transcripts",
+    "summary_upload": "oneDrive/yt-bot/summaries"
+  },
+  "auth": {
+    "chatgpt_token": "",
+    "onedrive_account": ""
+  },
+  "ui": {
+    "onedrive_categories": [
+      {
+        "name": "회의",
+        "files": [
+          "회의록_2024-05-프로젝트A.mp4",
+          "회의록_2024-05-프로젝트B.mp4"
+        ]
+      },
+      {
+        "name": "교육",
+        "files": [
+          "세미나_테스트자동화.mp4",
+          "워크샵_프롬프트엔지니어링.mp4"
+        ]
+      }
+    ]
+  }
+}
