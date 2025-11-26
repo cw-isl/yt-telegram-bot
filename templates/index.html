@@ -1,30 +1,44 @@
 {% extends 'base.html' %}
 {% block content %}
 <div class="row g-3">
-  <div class="col-lg-6">
+  <div class="col-lg-6" id="live">
     <div class="section-card h-100">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4>1. 유튜브 영상녹화</h4>
-        <span class="badge rounded-pill bg-primary">ChatGPT 단일 엔진</span>
+        <h4>1. 라이브 녹화</h4>
+        <span class="badge rounded-pill bg-primary">녹화 컨트롤</span>
       </div>
-      <form method="post" action="{{ url_for('record_action') }}" class="mb-3">
-        <h6 class="mb-2">라이브 녹화</h6>
-        <div class="btn-group" role="group">
+      <form method="post" action="{{ url_for('record_live_action') }}" class="mb-2">
+        <div class="btn-group w-100" role="group">
           <button class="btn btn-outline-primary" name="action" value="녹화 시작">녹화 시작</button>
           <button class="btn btn-outline-secondary" name="action" value="일시정지">일시정지</button>
           <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
           <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
         </div>
       </form>
+      <p class="text-muted small mb-0">라이브 녹화 제어와 링크 다운로드를 완전히 분리했습니다. 녹화 버튼을 눌러도 다운로드 영역에는 영향을 주지 않습니다.</p>
+    </div>
+  </div>
 
-      <form method="post" action="{{ url_for('record_action') }}">
-        <h6 class="mb-2">링크 다운로드</h6>
+  <div class="col-lg-6" id="download-box">
+    <div class="section-card h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>2. 링크 다운로드</h4>
+        <span class="badge bg-light text-dark">진행률 표시</span>
+      </div>
+      <form id="download-form">
+        <label class="form-label" for="video_url">다운로드할 링크</label>
         <div class="input-group mb-2">
-          <input name="video_url" type="url" class="form-control" placeholder="https://www.youtube.com/..." required />
-          <button class="btn btn-primary" name="action" value="download">다운로드</button>
-          <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
+          <input name="video_url" id="video_url" type="url" class="form-control" placeholder="https://www.youtube.com/..." required />
+          <button class="btn btn-primary" type="submit">다운로드</button>
         </div>
-        <p class="text-muted small mb-0">ffmpeg 유무와 상관없이 다운로드를 시도한 후 지정 경로로 업로드합니다.</p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" value="on" id="upload_after" name="upload_after" />
+          <label class="form-check-label" for="upload_after">다운로드 후 원드라이브 업로드 예약</label>
+        </div>
+        <div class="progress mb-2 d-none" id="download-progress">
+          <div class="progress-bar" role="progressbar" style="width: 0%" id="download-progress-bar"></div>
+        </div>
+        <div class="small text-muted" id="download-status">대기 중</div>
       </form>
     </div>
   </div>
@@ -32,7 +46,7 @@
   <div class="col-lg-6" id="transcript">
     <div class="section-card h-100">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4>2. 전사 및 요약</h4>
+        <h4>3. 전사 및 요약</h4>
         <span class="badge bg-light text-dark">진행률 실시간 표시</span>
       </div>
 
@@ -95,16 +109,30 @@
   <div class="col-12">
     <div class="section-card">
       <div class="d-flex justify-content-between align-items-center mb-3">
-        <h4>3. 설정</h4>
-        <span class="badge bg-info text-dark">업로드 경로 &amp; 권한</span>
+        <h4>4. 설정</h4>
+        <span class="badge bg-info text-dark">경로 &amp; 인증서</span>
+      </div>
+      <div class="alert alert-warning d-flex align-items-center" role="alert">
+        <div>
+          <div class="fw-semibold">HTTPS 상태</div>
+          {% if https_state.active %}
+          <div class="small mb-1">인증서 주체: {{ https_state.cert_subject or '확인되지 않음' }}</div>
+          <div class="small mb-0">신뢰할 수 있는 CA에서 발급된 인증서를 사용하고, IP 대신 인증서에 포함된 도메인으로 접속하면 경고 없이 바로 열립니다.</div>
+          {% else %}
+          <div class="small mb-0">{{ https_state.message }}. SSL_CERT_FILE/SSL_KEY_FILE 환경변수에 CA가 서명한 인증서를 지정하세요.</div>
+          {% endif %}
+        </div>
       </div>
       <form method="post" action="{{ url_for('settings_action') }}" class="row g-3">
+        <div class="col-12">
+          <h6 class="text-muted mb-2">녹화 · 다운로드 저장소</h6>
+        </div>
         <div class="col-md-4">
-          <label class="form-label">다운로드/녹화 저장 위치</label>
+          <label class="form-label">다운로드 저장 위치</label>
           <input class="form-control" name="downloads" value="{{ settings.paths.downloads }}" />
         </div>
         <div class="col-md-4">
-          <label class="form-label">녹화 원본 저장</label>
+          <label class="form-label">라이브 녹화 저장</label>
           <input class="form-control" name="recordings" value="{{ settings.paths.recordings }}" />
         </div>
         <div class="col-md-4">
@@ -115,6 +143,9 @@
         <div class="col-md-4">
           <label class="form-label">요약 저장 위치</label>
           <input class="form-control" name="summaries" value="{{ settings.paths.summaries }}" />
+        </div>
+        <div class="col-12">
+          <h6 class="text-muted mb-2">자동 업로드 경로</h6>
         </div>
         <div class="col-md-4">
           <label class="form-label">전사 업로드 경로 (OneDrive)</label>
@@ -165,4 +196,64 @@
     </div>
   </div>
 </div>
+<script>
+  const downloadForm = document.getElementById("download-form");
+  const downloadProgress = document.getElementById("download-progress");
+  const progressBar = document.getElementById("download-progress-bar");
+  const downloadStatus = document.getElementById("download-status");
+
+  if (downloadForm) {
+    let timerId;
+
+    const updateProgress = (value, stateClass = "bg-info") => {
+      progressBar.style.width = `${value}%`;
+      progressBar.className = `progress-bar ${stateClass}`;
+    };
+
+    const startProgress = () => {
+      downloadProgress.classList.remove("d-none");
+      updateProgress(6);
+      timerId = setInterval(() => {
+        const current = parseFloat(progressBar.style.width) || 0;
+        const next = Math.min(current + Math.random() * 12, 92);
+        updateProgress(next);
+      }, 400);
+    };
+
+    const finishProgress = (ok) => {
+      clearInterval(timerId);
+      updateProgress(100, ok ? "bg-success" : "bg-danger");
+    };
+
+    downloadForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const videoUrl = document.getElementById("video_url").value;
+      const uploadAfter = document.getElementById("upload_after").checked;
+
+      if (!videoUrl) {
+        downloadStatus.textContent = "링크를 입력하세요.";
+        return;
+      }
+
+      startProgress();
+      downloadStatus.textContent = "다운로드 중...";
+
+      try {
+        const response = await fetch("{{ url_for('download_action') }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_url: videoUrl, upload_after: uploadAfter }),
+        });
+
+        const payload = await response.json();
+        const success = response.ok && payload.ok;
+        finishProgress(success);
+        downloadStatus.textContent = payload.message || (success ? "다운로드 완료" : "다운로드에 실패했습니다.");
+      } catch (error) {
+        finishProgress(false);
+        downloadStatus.textContent = "다운로드 요청 중 오류가 발생했습니다.";
+      }
+    });
+  }
+</script>
 {% endblock %}

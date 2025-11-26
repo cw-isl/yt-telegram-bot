@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import uuid
 import os
+import ssl
+import uuid
 from pathlib import Path
 from typing import List
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
 from youtube_recorder_bot import load_settings, save_settings, yt_download
 
@@ -57,28 +58,78 @@ def _ssl_context():
     return None
 
 
+def _https_status() -> dict:
+    """Return certificate visibility hints for the UI."""
+
+    cert_path = Path(os.getenv("SSL_CERT_FILE", ""))
+    key_path = Path(os.getenv("SSL_KEY_FILE", ""))
+    if not (cert_path.exists() and key_path.exists()):
+        return {
+            "active": False,
+            "message": "유효한 인증서 경로가 설정되지 않아 HTTP로 동작 중입니다.",
+            "cert_subject": None,
+        }
+
+    subject = None
+    try:
+        cert_info = ssl._ssl._test_decode_cert(str(cert_path))
+        subject_items = dict(cert_info.get("subject", []))
+        cn = subject_items.get("commonName") or subject_items.get("organizationName")
+        if cn:
+            subject = cn
+    except Exception:
+        subject = None
+
+    return {
+        "active": True,
+        "message": "신뢰할 수 있는 인증서가 필요합니다. 발급 기관이 루트 인증서에 포함되어야 경고가 사라집니다.",
+        "cert_subject": subject,
+    }
+
+
 @app.route("/")
 def index():
     settings = load_settings()
     categories: List[dict] = settings.get("ui", {}).get("onedrive_categories", [])
     jobs = _jobs_state()
-    return render_template("index.html", settings=settings, categories=categories, jobs=jobs)
+    return render_template(
+        "index.html",
+        settings=settings,
+        categories=categories,
+        jobs=jobs,
+        https_state=_https_status(),
+    )
 
 
-@app.route("/record", methods=["POST"])
-def record_action():
+@app.route("/record/live", methods=["POST"])
+def record_live_action():
     action = request.form.get("action")
-    link = request.form.get("video_url") or ""
-    if action == "download" and link:
-        dest = Path(load_settings().get("paths", {}).get("downloads", "downloads"))
-        result = yt_download(link, dest)
-        if result:
-            flash(f"다운로드 완료: {result.name}", "success")
-        else:
-            flash("다운로드에 실패했습니다. 링크를 확인하거나 ffmpeg 설치를 점검하세요.", "danger")
-    elif action:
+    if action:
         flash(f"{action} 작업을 시작했습니다.", "info")
-    return redirect(url_for("index"))
+    return redirect(url_for("index") + "#live")
+
+
+@app.route("/download", methods=["POST"])
+def download_action():
+    payload = request.get_json(silent=True) or {}
+    link = (payload.get("video_url") or request.form.get("video_url") or "").strip()
+    upload_after = payload.get("upload_after") in {True, "true", "on", "1", 1}
+
+    if not link:
+        return jsonify({"ok": False, "message": "다운로드할 유튜브 링크를 입력하세요."}), 400
+
+    dest = Path(load_settings().get("paths", {}).get("downloads", "downloads"))
+    result = yt_download(link, dest)
+    if not result:
+        return jsonify({"ok": False, "message": "다운로드에 실패했습니다. 링크 또는 ffmpeg 설치를 확인하세요."}), 500
+
+    message = f"다운로드 완료: {result.name}"
+    if upload_after:
+        # Placeholder for future upload integration
+        message += " (업로드 예약)"
+
+    flash(message, "success")
+    return jsonify({"ok": True, "message": message, "file_name": result.name})
 
 
 @app.route("/transcript", methods=["POST"])
@@ -126,7 +177,8 @@ def settings_action():
 @app.context_processor
 def inject_nav():
     nav_links = [
-        {"href": url_for("index"), "label": "유튜브 영상녹화"},
+        {"href": url_for("index") + "#live", "label": "라이브 녹화"},
+        {"href": url_for("index") + "#download-box", "label": "링크 다운로드"},
         {"href": "#transcript", "label": "전사 및 요약"},
         {"href": "#settings", "label": "설정"},
     ]

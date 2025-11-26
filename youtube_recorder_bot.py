@@ -60,7 +60,7 @@ def _ffmpeg_available() -> bool:
 # ---------------------------------------------------------------------------
 # YouTube download helpers
 # ---------------------------------------------------------------------------
-DEFAULT_OUTPUT_TEMPLATE = "%(title).80B.%(ext)s"
+DEFAULT_OUTPUT_TEMPLATE = "%(title).80B.mp4"
 
 
 def _yt_common_opts(*, allow_ffmpeg: bool = True, download_dir: Path | None = None) -> list[str]:
@@ -77,11 +77,13 @@ def _yt_common_opts(*, allow_ffmpeg: bool = True, download_dir: Path | None = No
         str(download_dir / DEFAULT_OUTPUT_TEMPLATE),
         "--no-playlist",
         "--no-progress",
+        "-f",
+        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
     ]
     if allow_ffmpeg:
         opts.extend([
-            "--remux-video",
-            "webm/mp4",
+            "--merge-output-format",
+            "mp4",
             "--postprocessor-args",
             "-c:v copy -c:a copy",
         ])
