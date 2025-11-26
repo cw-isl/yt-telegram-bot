@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import os
 from pathlib import Path
 from typing import List
 
@@ -18,6 +19,22 @@ def _jobs_state():
         "transcript": {"active": 72},
         "summary": {"active": 48},
     }
+
+
+def _ssl_context():
+    """Return an SSL context tuple when certificate paths are configured.
+
+    The built-in Flask server is still meant for development only, but this
+    helper makes it easy to bind HTTPS to port 6500 when you provide
+    SSL_CERT_FILE and SSL_KEY_FILE environment variables.
+    """
+
+    cert_path = Path(os.getenv("SSL_CERT_FILE", ""))
+    key_path = Path(os.getenv("SSL_KEY_FILE", ""))
+
+    if cert_path.exists() and key_path.exists():
+        return str(cert_path), str(key_path)
+    return None
 
 
 @app.route("/")
@@ -116,4 +133,4 @@ def ideas():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=6500)
+    app.run(debug=True, host="0.0.0.0", port=6500, ssl_context=_ssl_context())
