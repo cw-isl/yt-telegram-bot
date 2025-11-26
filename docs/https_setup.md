@@ -1,29 +1,45 @@
-# Flask 개발 서버 HTTPS 설정 (포트 6500)
+# HTTPS 배포 절차 (1~6단계)
 
-기본 Flask 서버는 HTTP로 동작하기 때문에 iOS 사파리 등에서 "안전하지 않은 정보를 제출" 경고가 표시될 수 있습니다. 아래 절차로 6500 포트에만 HTTPS를 적용할 수 있습니다.
+아래 순서대로 진행하면 Flask 앱을 6500 포트 HTTPS 모드로 실행할 수 있습니다.
 
-1. **인증서/키 준비**
-   - 자체 서명 인증서를 생성하려면 (예시):
-     ```bash
-     openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes \
-       -subj "/CN=localhost"
-     ```
-   - 배포 환경에서는 실제 도메인에 맞는 신뢰된 인증서를 사용하세요.
+## 1단계 — 인증서와 키 생성
+```bash
+cd /root/rcbot
+openssl req -x509 --newkey rsa:2048 \
+  --keyout key.pem --out cert.pem \
+  -days 365 \
+  -nodes \
+  -subj "/CN=localhost"
+```
+성공 시 `/root/rcbot/` 안에 `cert.pem`, `key.pem`이 생깁니다.
 
-2. **환경 변수 지정** (`.env` 또는 쉘에서 지정)
-   ```bash
-   export SSL_CERT_FILE=/절대/경로/cert.pem
-   export SSL_KEY_FILE=/절대/경로/key.pem
-   ```
+## 2단계 — 환경 변수 등록
+`.env` 파일을 사용해 인증서 경로를 지정하는 것을 권장합니다.
 
-3. **서버 실행**
-   ```bash
-   python app.py
-   ```
-   - 인증서 경로가 올바르면 Flask 개발 서버가 `https://<호스트>:6500` 으로 기동됩니다.
-   - 인증서가 없거나 경로가 잘못되면 자동으로 HTTP로 실행되므로 경고가 다시 보일 수 있습니다.
+`/root/rcbot/.env` (또는 저장소 루트의 `.env`)에 아래 내용을 추가합니다.
+```bash
+SSL_CERT_FILE=/root/rcbot/cert.pem
+SSL_KEY_FILE=/root/rcbot/key.pem
+```
 
-4. **클라이언트 신뢰 처리**
-   - 자체 서명 인증서의 경우, 사용하는 디바이스에 인증서를 신뢰하도록 설치해야 브라우저 경고가 제거됩니다.
+## 3단계 — app.py 수정 사항
+앱이 `.env` 파일을 직접 읽어 `SSL_CERT_FILE`·`SSL_KEY_FILE` 값을 환경 변수로 주입합니다. 두 파일이 모두 존재하면 HTTPS(포트 6500)로 구동하고, 값이 없으면 HTTP로 동일한 포트에서 실행합니다.
 
-> 참고: Flask 기본 서버는 개발용이므로 운영 환경에서는 Nginx/Apache 같은 역방향 프록시에 인증서를 올려 HTTPS를 termination 하는 구성이 권장됩니다.
+## 4단계 — systemd 서비스 수정
+HTTPS 실행을 위한 예시 서비스 파일(`config/ytweb.service`)을 추가했습니다. 실제 서버에서는 파일을 `/etc/systemd/system/ytweb.service`로 복사 후 경로를 환경에 맞게 조정하세요.
+```bash
+sudo cp config/ytweb.service /etc/systemd/system/ytweb.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now ytweb.service
+```
+
+## 5단계 — 방화벽 허용
+서버 방화벽에서 6500 포트를 개방합니다.
+```bash
+sudo ufw allow 6500/tcp
+```
+
+## 6단계 — 접속 테스트
+아이폰/브라우저에서 `https://<서버IP>:6500/`에 접속합니다.
+- 자체 서명 인증서이므로 경고가 표시될 수 있습니다.
+- "신뢰"를 선택하면 HTTPS로 정상 접속됩니다.

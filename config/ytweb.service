@@ -1,0 +1,14 @@
+[Unit]
+Description=YouTube Recorder Bot (HTTPS)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/rcbot
+EnvironmentFile=/root/rcbot/.env
+ExecStart=/root/rcbot/venv/bin/python3 /root/rcbot/app.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

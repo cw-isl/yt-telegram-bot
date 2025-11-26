@@ -9,6 +9,26 @@ from flask import Flask, flash, redirect, render_template, request, url_for
 
 from youtube_recorder_bot import load_settings, save_settings, yt_download
 
+
+BASE_DIR = Path(__file__).resolve().parent
+
+
+def _load_env_file(env_path: Path = BASE_DIR / ".env") -> None:
+    """Load key/value pairs from a .env file if it exists."""
+
+    if not env_path.exists():
+        return
+
+    for raw in env_path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_env_file()
+
 app = Flask(__name__)
 app.secret_key = "dev-secret"  # replace in production
 
@@ -133,4 +153,11 @@ def ideas():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=6500, ssl_context=_ssl_context())
+    ssl_context = _ssl_context()
+
+    if ssl_context:
+        print("Starting HTTPS on port 6500 with provided certificates.")
+        app.run(debug=True, host="0.0.0.0", port=6500, ssl_context=ssl_context)
+    else:
+        print("SSL_CERT_FILE 또는 SSL_KEY_FILE이 설정되지 않아 HTTP로 실행합니다.")
+        app.run(debug=True, host="0.0.0.0", port=6500)
