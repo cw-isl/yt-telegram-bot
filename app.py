@@ -114,6 +114,11 @@ def _https_status() -> dict:
     }
 
 
+def _looks_like_live_url(url: str) -> bool:
+    lowered = url.lower()
+    return any(marker in lowered for marker in ["youtube.com/live", "youtu.be", "live.youtube.com"])
+
+
 @app.route("/")
 def index():
     settings = load_settings()
@@ -131,7 +136,19 @@ def index():
 @app.route("/record/live", methods=["POST"])
 def record_live_action():
     action = request.form.get("action")
-    if action:
+    live_url = request.form.get("live_url", "").strip()
+
+    if action == "녹화 시작":
+        if not live_url:
+            flash("라이브 주소를 입력하세요.", "warning")
+            return redirect(url_for("index") + "#live")
+        if not _looks_like_live_url(live_url):
+            flash("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.", "warning")
+            return redirect(url_for("index") + "#live")
+        flash("라이브 녹화를 시작했습니다.", "success")
+    elif action == "종료":
+        flash("녹화를 종료했습니다.", "info")
+    elif action:
         flash(f"{action} 작업을 시작했습니다.", "info")
     return redirect(url_for("index") + "#live")
 

@@ -82,7 +82,7 @@ def _yt_common_opts(*, allow_ffmpeg: bool = True, download_dir: Path | None = No
     ]
     if allow_ffmpeg:
         opts.extend([
-            "--merge-output-format",
+            "--remux-video",
             "mp4",
             "--postprocessor-args",
             "-c:v copy -c:a copy",
