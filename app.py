@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import List
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from youtube_recorder_bot import load_settings, save_settings, yt_download
 
@@ -32,6 +33,14 @@ _load_env_file()
 
 app = Flask(__name__)
 app.secret_key = "dev-secret"  # replace in production
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+
+def _bool_env(key: str, default: bool = False) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _jobs_state():
@@ -58,15 +67,33 @@ def _ssl_context():
     return None
 
 
+def _reverse_proxy_enabled() -> bool:
+    """Return True when TLS termination is handled by a reverse proxy."""
+
+    return _bool_env("USE_REVERSE_PROXY_SSL")
+
+
 def _https_status() -> dict:
     """Return certificate visibility hints for the UI."""
+
+    if _reverse_proxy_enabled():
+        domain = (
+            os.getenv("EXTERNAL_HOST")
+            or os.getenv("SERVER_NAME")
+            or "설정한 도메인"
+        )
+        return {
+            "active": True,
+            "message": "NGINX 리버스 프록시가 Let's Encrypt 인증서를 관리하며 Flask는 HTTP로 동작합니다.",
+            "cert_subject": domain,
+        }
 
     cert_path = Path(os.getenv("SSL_CERT_FILE", ""))
     key_path = Path(os.getenv("SSL_KEY_FILE", ""))
     if not (cert_path.exists() and key_path.exists()):
         return {
             "active": False,
-            "message": "유효한 인증서 경로가 설정되지 않아 HTTP로 동작 중입니다.",
+            "message": "유효한 인증서 경로가 설정되지 않아 HTTP로 동작 중입니다. 리버스 프록시를 사용한다면 USE_REVERSE_PROXY_SSL 환경 변수를 true로 지정하세요.",
             "cert_subject": None,
         }
 
@@ -205,9 +232,15 @@ def ideas():
 
 
 if __name__ == "__main__":
-    ssl_context = _ssl_context()
+    proxy_mode = _reverse_proxy_enabled()
+    ssl_context = None if proxy_mode else _ssl_context()
 
-    if ssl_context:
+    if proxy_mode:
+        print(
+            "USE_REVERSE_PROXY_SSL=true 로 설정되었습니다. NGINX가 TLS를 종료하고 Flask는 HTTP 6500 포트에서 동작합니다."
+        )
+        app.run(debug=True, host="0.0.0.0", port=6500)
+    elif ssl_context:
         print("Starting HTTPS on port 6500 with provided certificates.")
         app.run(debug=True, host="0.0.0.0", port=6500, ssl_context=ssl_context)
     else:
