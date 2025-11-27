@@ -7,13 +7,19 @@
         <h4>1. 라이브 녹화</h4>
         <span class="badge rounded-pill bg-primary">녹화 컨트롤</span>
       </div>
-      <form method="post" action="{{ url_for('record_live_action') }}" class="mb-2">
+      <form method="post" action="{{ url_for('record_live_action') }}" class="mb-2" id="live-form">
+        <label class="form-label" for="live_url">라이브 주소</label>
+        <div class="input-group mb-2">
+          <input name="live_url" id="live_url" type="url" class="form-control" placeholder="https://www.youtube.com/live/..." />
+          <span class="input-group-text bg-light" id="live-timer" role="status" aria-live="polite">대기 중</span>
+        </div>
         <div class="btn-group w-100" role="group">
           <button class="btn btn-outline-primary" name="action" value="녹화 시작">녹화 시작</button>
           <button class="btn btn-outline-secondary" name="action" value="일시정지">일시정지</button>
           <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
           <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
         </div>
+        <div class="form-text text-danger" id="live-status" aria-live="polite"></div>
       </form>
       <p class="text-muted small mb-0">라이브 녹화 제어와 링크 다운로드를 완전히 분리했습니다. 녹화 버튼을 눌러도 다운로드 영역에는 영향을 주지 않습니다.</p>
     </div>
@@ -197,6 +203,99 @@
   </div>
 </div>
 <script>
+  const liveForm = document.getElementById("live-form");
+  const liveUrlInput = document.getElementById("live_url");
+  const liveStatus = document.getElementById("live-status");
+  const liveTimer = document.getElementById("live-timer");
+  const LIVE_TIMER_KEY = "yt-helper-live-started-at";
+  let liveTimerId;
+
+  const setLiveStatus = (message, variant = "text-danger") => {
+    if (!liveStatus) return;
+    liveStatus.className = `form-text ${variant}`;
+    liveStatus.textContent = message || "";
+  };
+
+  const isLiveUrl = (value) => {
+    if (!value) return false;
+    const normalized = value.toLowerCase();
+    return ["youtube.com/live", "youtu.be", "live.youtube.com"].some((key) => normalized.includes(key));
+  };
+
+  const formatElapsed = (ms) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
+    const minutes = String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, "0");
+    const seconds = String(totalSeconds % 60).padStart(2, "0");
+    return `${hours}:${minutes}:${seconds}`;
+  };
+
+  const stopLiveTimer = () => {
+    if (liveTimerId) {
+      clearInterval(liveTimerId);
+    }
+    if (liveTimer) {
+      liveTimer.textContent = "대기 중";
+      liveTimer.classList.remove("text-primary", "fw-semibold");
+    }
+    liveTimerId = undefined;
+  };
+
+  const startLiveTimer = (startedAt) => {
+    if (!liveTimer) return;
+    const origin = Number(startedAt);
+    if (Number.isNaN(origin)) return;
+    stopLiveTimer();
+    const render = () => {
+      const elapsed = Date.now() - origin;
+      liveTimer.textContent = `녹화 ${formatElapsed(elapsed)}`;
+    };
+    render();
+    liveTimer.classList.add("text-primary", "fw-semibold");
+    liveTimerId = setInterval(render, 1000);
+  };
+
+  const resumeLiveTimer = () => {
+    const saved = localStorage.getItem(LIVE_TIMER_KEY);
+    if (saved) {
+      startLiveTimer(Number(saved));
+    }
+  };
+
+  if (liveForm && liveUrlInput) {
+    resumeLiveTimer();
+
+    liveForm.addEventListener("submit", (event) => {
+      const action = event.submitter?.value;
+      const liveUrl = liveUrlInput.value.trim();
+
+      if (action === "녹화 시작") {
+        if (!liveUrl) {
+          event.preventDefault();
+          setLiveStatus("라이브 주소를 입력하세요.");
+          return;
+        }
+        if (!isLiveUrl(liveUrl)) {
+          event.preventDefault();
+          setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
+          return;
+        }
+        const now = Date.now();
+        localStorage.setItem(LIVE_TIMER_KEY, now.toString());
+        startLiveTimer(now);
+        setLiveStatus("라이브 녹화를 시작했습니다.", "text-success");
+      } else if (action === "종료") {
+        localStorage.removeItem(LIVE_TIMER_KEY);
+        stopLiveTimer();
+        setLiveStatus("녹화를 종료했습니다.", "text-muted");
+      } else if (action === "일시정지") {
+        setLiveStatus("녹화를 일시정지했습니다.", "text-muted");
+      } else if (action === "업로드") {
+        setLiveStatus("업로드를 시작합니다.", "text-muted");
+      }
+    });
+  }
+
   const downloadForm = document.getElementById("download-form");
   const downloadProgress = document.getElementById("download-progress");
   const progressBar = document.getElementById("download-progress-bar");
