@@ -18,9 +18,29 @@
           <button class="btn btn-outline-secondary" name="action" value="일시정지">일시정지</button>
           <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
           <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
+          <button type="button" class="btn btn-outline-info" id="live-search-button">검색</button>
         </div>
         <div class="form-text text-danger" id="live-status" aria-live="polite"></div>
       </form>
+      <div class="live-preview mt-3" id="live-preview-wrapper">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="mb-0">라이브 미리보기</h6>
+          <span class="badge bg-light text-dark">YouTube</span>
+        </div>
+        <div class="ratio ratio-16x9 border rounded overflow-hidden bg-light" id="live-preview-shell">
+          <iframe
+            id="live-preview-frame"
+            title="YouTube 라이브 미리보기"
+            allowfullscreen
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            class="d-none"
+          ></iframe>
+          <div class="d-flex align-items-center justify-content-center h-100 text-muted" id="live-preview-placeholder">
+            라이브 링크를 검색하면 스트리밍 화면이 나타납니다.
+          </div>
+        </div>
+        <div class="form-text text-muted mt-1" id="live-preview-status"></div>
+      </div>
       <p class="text-muted small mb-0">라이브 녹화 제어와 링크 다운로드를 완전히 분리했습니다. 녹화 버튼을 눌러도 다운로드 영역에는 영향을 주지 않습니다.</p>
     </div>
   </div>
@@ -207,6 +227,10 @@
   const liveUrlInput = document.getElementById("live_url");
   const liveStatus = document.getElementById("live-status");
   const liveTimer = document.getElementById("live-timer");
+  const livePreviewFrame = document.getElementById("live-preview-frame");
+  const livePreviewPlaceholder = document.getElementById("live-preview-placeholder");
+  const livePreviewStatus = document.getElementById("live-preview-status");
+  const liveSearchButton = document.getElementById("live-search-button");
   const LIVE_TIMER_KEY = "yt-helper-live-started-at";
   let liveTimerId;
 
@@ -220,6 +244,50 @@
     if (!value) return false;
     const normalized = value.toLowerCase();
     return ["youtube.com/live", "youtu.be", "live.youtube.com"].some((key) => normalized.includes(key));
+  };
+
+  const setLivePreviewStatus = (message, variant = "text-muted") => {
+    if (!livePreviewStatus) return;
+    livePreviewStatus.className = `form-text ${variant}`;
+    livePreviewStatus.textContent = message || "";
+  };
+
+  const extractYoutubeId = (value) => {
+    if (!value) return null;
+
+    const idPattern = /^[a-zA-Z0-9_-]{6,}$/;
+    if (idPattern.test(value) && !value.includes("/")) {
+      return value;
+    }
+
+    try {
+      const url = new URL(value);
+      const host = url.hostname.replace(/^www\./, "").toLowerCase();
+
+      if (host === "youtu.be") {
+        return url.pathname.split("/").filter(Boolean)[0] || null;
+      }
+
+      if (host.endsWith("youtube.com")) {
+        const byParam = url.searchParams.get("v");
+        if (byParam) return byParam;
+
+        const parts = url.pathname.split("/").filter(Boolean);
+        if (parts[0] === "live" && parts[1]) return parts[1];
+        if (parts[0] === "embed" && parts[1]) return parts[1];
+      }
+    } catch (error) {
+      return null;
+    }
+
+    return null;
+  };
+
+  const showLivePreview = (embedUrl) => {
+    if (!livePreviewFrame || !livePreviewPlaceholder) return;
+    livePreviewFrame.src = embedUrl;
+    livePreviewFrame.classList.remove("d-none");
+    livePreviewPlaceholder.classList.add("d-none");
   };
 
   const formatElapsed = (ms) => {
@@ -265,6 +333,8 @@
   if (liveForm && liveUrlInput) {
     resumeLiveTimer();
 
+    setLivePreviewStatus("YouTube 라이브 주소를 입력하고 검색을 눌러주세요.");
+
     liveForm.addEventListener("submit", (event) => {
       const action = event.submitter?.value;
       const liveUrl = liveUrlInput.value.trim();
@@ -293,6 +363,35 @@
       } else if (action === "업로드") {
         setLiveStatus("업로드를 시작합니다.", "text-muted");
       }
+    });
+  }
+
+  if (liveSearchButton && liveUrlInput) {
+    liveSearchButton.addEventListener("click", () => {
+      const liveUrl = liveUrlInput.value.trim();
+
+      if (!liveUrl) {
+        setLiveStatus("라이브 주소를 입력하세요.");
+        setLivePreviewStatus("검색할 라이브 주소를 입력하세요.", "text-danger");
+        return;
+      }
+
+      if (!isLiveUrl(liveUrl)) {
+        setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
+        setLivePreviewStatus("유튜브 실시간 스트림 링크를 확인해주세요.", "text-danger");
+        return;
+      }
+
+      const videoId = extractYoutubeId(liveUrl);
+      if (!videoId) {
+        setLivePreviewStatus("유튜브 링크에서 영상 ID를 찾지 못했습니다.", "text-danger");
+        return;
+      }
+
+      const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1`;
+      showLivePreview(embedUrl);
+      setLiveStatus("스트리밍 화면을 불러왔습니다.", "text-success");
+      setLivePreviewStatus("현재 실시간 스트리밍 화면입니다.", "text-success");
     });
   }
 
