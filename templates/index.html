@@ -412,13 +412,6 @@
       const payload = await response.json();
       if (response.ok && payload.ok) {
         setLiveStatus(payload.message || "캡처 완료", "text-success");
-
-        if (payload.image_url) {
-          const anchor = document.createElement("a");
-          anchor.href = payload.image_url;
-          anchor.download = payload.image_url.split("/").pop() || "capture.png";
-          anchor.click();
-        }
       } else {
         setLiveStatus(payload.message || "캡처에 실패했습니다.", "text-danger");
       }
