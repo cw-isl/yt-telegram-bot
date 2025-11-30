@@ -19,6 +19,7 @@
           <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
           <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
           <button type="button" class="btn btn-outline-info" id="live-search-button">검색</button>
+          <button type="button" class="btn btn-outline-dark" id="live-capture-button">캡처</button>
         </div>
         <div class="form-text text-danger" id="live-status" aria-live="polite"></div>
       </form>
@@ -39,7 +40,6 @@
             라이브 링크를 검색하면 스트리밍 화면이 나타납니다.
           </div>
         </div>
-        <div class="form-text text-muted mt-1" id="live-preview-status"></div>
       </div>
       <p class="text-muted small mb-0">라이브 녹화 제어와 링크 다운로드를 완전히 분리했습니다. 녹화 버튼을 눌러도 다운로드 영역에는 영향을 주지 않습니다.</p>
     </div>
@@ -229,8 +229,8 @@
   const liveTimer = document.getElementById("live-timer");
   const livePreviewFrame = document.getElementById("live-preview-frame");
   const livePreviewPlaceholder = document.getElementById("live-preview-placeholder");
-  const livePreviewStatus = document.getElementById("live-preview-status");
   const liveSearchButton = document.getElementById("live-search-button");
+  const liveCaptureButton = document.getElementById("live-capture-button");
   const LIVE_TIMER_KEY = "yt-helper-live-started-at";
   let liveTimerId;
 
@@ -244,12 +244,6 @@
     if (!value) return false;
     const normalized = value.toLowerCase();
     return ["youtube.com/live", "youtu.be", "live.youtube.com"].some((key) => normalized.includes(key));
-  };
-
-  const setLivePreviewStatus = (message, variant = "text-muted") => {
-    if (!livePreviewStatus) return;
-    livePreviewStatus.className = `form-text ${variant}`;
-    livePreviewStatus.textContent = message || "";
   };
 
   const extractYoutubeId = (value) => {
@@ -333,8 +327,6 @@
   if (liveForm && liveUrlInput) {
     resumeLiveTimer();
 
-    setLivePreviewStatus("YouTube 라이브 주소를 입력하고 검색을 눌러주세요.");
-
     liveForm.addEventListener("submit", (event) => {
       const action = event.submitter?.value;
       const liveUrl = liveUrlInput.value.trim();
@@ -372,27 +364,87 @@
 
       if (!liveUrl) {
         setLiveStatus("라이브 주소를 입력하세요.");
-        setLivePreviewStatus("검색할 라이브 주소를 입력하세요.", "text-danger");
         return;
       }
 
       if (!isLiveUrl(liveUrl)) {
         setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
-        setLivePreviewStatus("유튜브 실시간 스트림 링크를 확인해주세요.", "text-danger");
         return;
       }
 
       const videoId = extractYoutubeId(liveUrl);
       if (!videoId) {
-        setLivePreviewStatus("유튜브 링크에서 영상 ID를 찾지 못했습니다.", "text-danger");
+        setLiveStatus("유튜브 링크에서 영상 ID를 찾지 못했습니다.", "text-danger");
         return;
       }
 
       const embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1`;
       showLivePreview(embedUrl);
       setLiveStatus("스트리밍 화면을 불러왔습니다.", "text-success");
-      setLivePreviewStatus("현재 실시간 스트리밍 화면입니다.", "text-success");
     });
+  }
+
+  const stopTracks = (stream) => {
+    if (!stream) return;
+    stream.getTracks().forEach((track) => track.stop());
+  };
+
+  const captureLivePreview = async () => {
+    if (!livePreviewFrame || livePreviewFrame.classList.contains("d-none") || !livePreviewFrame.src) {
+      setLiveStatus("검색으로 스트리밍 화면을 불러온 뒤 캡처할 수 있습니다.", "text-danger");
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setLiveStatus("브라우저가 화면 캡처를 지원하지 않습니다.", "text-danger");
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 } });
+      const [track] = stream.getVideoTracks();
+      const settings = track?.getSettings?.() || {};
+
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.muted = true;
+      await video.play();
+
+      await new Promise((resolve) => {
+        if (video.readyState >= 2) {
+          resolve();
+        } else {
+          video.onloadeddata = () => resolve();
+        }
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = settings.width || video.videoWidth;
+      canvas.height = settings.height || video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("blob-failed");
+
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = "youtube_capture.png";
+      anchor.click();
+      URL.revokeObjectURL(downloadUrl);
+
+      setLiveStatus("현재 스트리밍 화면을 캡처해 저장했습니다.", "text-success");
+    } catch (error) {
+      setLiveStatus("화면 캡처가 취소되었거나 실패했습니다.", "text-muted");
+    } finally {
+      stopTracks(stream);
+    }
+  };
+
+  if (liveCaptureButton) {
+    liveCaptureButton.addEventListener("click", captureLivePreview);
   }
 
   const downloadForm = document.getElementById("download-form");
