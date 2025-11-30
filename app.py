@@ -9,7 +9,7 @@ from typing import List
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from youtube_recorder_bot import load_settings, save_settings, yt_download
+from youtube_recorder_bot import capture_live_frame, load_settings, save_settings, yt_download
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -151,6 +151,25 @@ def record_live_action():
     elif action:
         flash(f"{action} 작업을 시작했습니다.", "info")
     return redirect(url_for("index") + "#live")
+
+
+@app.route("/capture/live", methods=["POST"])
+def capture_live_action():
+    payload = request.get_json(silent=True) or {}
+    live_url = (payload.get("live_url") or "").strip()
+
+    if not live_url:
+        return jsonify({"ok": False, "message": "라이브 주소를 입력한 뒤 캡처하세요."}), 400
+
+    if not _looks_like_live_url(live_url):
+        return jsonify({"ok": False, "message": "유튜브 라이브 링크가 맞는지 확인하세요."}), 400
+
+    output_path, error = capture_live_frame(live_url)
+    if error or not output_path:
+        return jsonify({"ok": False, "message": error or "캡처에 실패했습니다."}), 500
+
+    public_url = url_for("static", filename=f"captures/{output_path.name}")
+    return jsonify({"ok": True, "message": f"서버에서 캡처를 완료했습니다: {output_path.name}", "image_url": public_url})
 
 
 @app.route("/download", methods=["POST"])
