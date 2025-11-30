@@ -197,9 +197,17 @@ def download_action():
         return jsonify({"ok": False, "message": "다운로드할 유튜브 링크를 입력하세요."}), 400
 
     dest = Path(load_settings().get("paths", {}).get("downloads", "downloads"))
-    result = yt_download(link, dest)
-    if not result:
-        return jsonify({"ok": False, "message": "다운로드에 실패했습니다. 링크 또는 ffmpeg 설치를 확인하세요."}), 500
+    result, error = yt_download(link, dest)
+    if error or not result:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "message": error or "다운로드에 실패했습니다. 링크 또는 ffmpeg 설치를 확인하세요.",
+                }
+            ),
+            500,
+        )
 
     message = f"다운로드 완료: {result.name}"
     if upload_after:

@@ -9,6 +9,7 @@ fallback logic.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import uuid
@@ -61,13 +62,37 @@ def save_settings(data: dict) -> None:
 # Command helpers
 # ---------------------------------------------------------------------------
 def run_cmd(cmd: Iterable[str], **kwargs) -> Tuple[int, str, str]:
-    """Run a command and return (returncode, stdout, stderr)."""
-    process = subprocess.run(list(cmd), capture_output=True, text=True, **kwargs)
-    return process.returncode, process.stdout or "", process.stderr or ""
+    """Run a command and return (returncode, stdout, stderr).
+
+    A missing binary is reported as a standard return code (127) so callers can
+    surface a helpful error message instead of crashing.
+    """
+
+    try:
+        process = subprocess.run(list(cmd), capture_output=True, text=True, **kwargs)
+        return process.returncode, process.stdout or "", process.stderr or ""
+    except FileNotFoundError as exc:  # pragma: no cover - exercised via higher level
+        missing = Path(list(cmd)[0]).name
+        return 127, "", f"{missing} executable not found: {exc}"
+
+
+def _ffmpeg_path() -> Path | None:
+    """Return an ffmpeg path when it is available or configured via env."""
+
+    env_path = Path(shutil.which("ffmpeg") or "")
+    if env_path.exists():
+        return env_path
+
+    fallback = os.getenv("FFMPEG_PATH")
+    if fallback:
+        candidate = Path(fallback).expanduser()
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _ffmpeg_available() -> bool:
-    return shutil.which("ffmpeg") is not None
+    return _ffmpeg_path() is not None
 
 
 def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | None, str | None]:
@@ -118,7 +143,9 @@ def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | N
 DEFAULT_OUTPUT_TEMPLATE = "%(title).80B.mp4"
 
 
-def _yt_common_opts(*, allow_ffmpeg: bool = True, download_dir: Path | None = None) -> list[str]:
+def _yt_common_opts(
+    *, allow_ffmpeg: bool = True, download_dir: Path | None = None, ffmpeg_path: Path | None = None
+) -> list[str]:
     """Common yt-dlp options for both recording and downloads.
 
     allow_ffmpeg=False removes post-processing flags so downloads succeed even
@@ -127,15 +154,24 @@ def _yt_common_opts(*, allow_ffmpeg: bool = True, download_dir: Path | None = No
     download_dir = Path(download_dir or BASE_DIR / "recordings")
     download_dir.mkdir(parents=True, exist_ok=True)
 
+    format_selector = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    if not allow_ffmpeg:
+        # Avoid formats that require muxing when ffmpeg is missing. Restrict to
+        # progressive streams with both audio/video so yt-dlp can save without
+        # additional tools.
+        format_selector = "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none]"
+
     opts: list[str] = [
         "-o",
         str(download_dir / DEFAULT_OUTPUT_TEMPLATE),
         "--no-playlist",
         "--no-progress",
         "-f",
-        "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        format_selector,
     ]
     if allow_ffmpeg:
+        if ffmpeg_path:
+            opts.extend(["--ffmpeg-location", str(ffmpeg_path)])
         opts.extend([
             "--remux-video",
             "mp4",
@@ -155,24 +191,32 @@ def _expected_download_path(download_dir: Path) -> Path | None:
     return files[0] if files else None
 
 
-def yt_download(url: str, download_dir: Path, *, allow_ffmpeg: bool = True) -> Path | None:
+def yt_download(url: str, download_dir: Path, *, allow_ffmpeg: bool = True) -> tuple[Path | None, str | None]:
     """Download a YouTube video with a best-effort ffmpeg fallback."""
+
     download_dir = Path(download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
 
+    ffmpeg_path = _ffmpeg_path()
+    last_error = None
+
     attempts = []
-    if allow_ffmpeg and _ffmpeg_available():
+    if allow_ffmpeg and ffmpeg_path:
         attempts.append(True)
     attempts.append(False)  # always keep a non-ffmpeg fallback
 
     for use_ffmpeg in attempts:
-        opts = _yt_common_opts(allow_ffmpeg=use_ffmpeg, download_dir=download_dir)
-        rc, _, _ = run_cmd(["yt-dlp", url, *opts])
+        opts = _yt_common_opts(
+            allow_ffmpeg=use_ffmpeg, download_dir=download_dir, ffmpeg_path=ffmpeg_path
+        )
+        rc, stdout, stderr = run_cmd(["yt-dlp", url, *opts])
         if rc == 0:
             path = _expected_download_path(download_dir)
             if path and path.exists():
-                return path
-    return None
+                return path, None
+        last_error = stderr or stdout or "다운로드 중 알 수 없는 오류가 발생했습니다."
+
+    return None, last_error
 
 
 if __name__ == "__main__":
