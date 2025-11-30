@@ -21,6 +21,8 @@ def _extract_output_path(cmd):
 def test_common_opts_remove_ffmpeg(bot_module):
     opts = bot_module._yt_common_opts(allow_ffmpeg=True)
     assert "--remux-video" in opts
+    assert "--extractor-args" in opts
+    assert bot_module.YOUTUBE_EXTRACTOR_ARGS in opts
 
     opts_no_ffmpeg = bot_module._yt_common_opts(allow_ffmpeg=False)
     assert "--remux-video" not in opts_no_ffmpeg

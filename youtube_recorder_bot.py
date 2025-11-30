@@ -19,6 +19,7 @@ from typing import Iterable, Tuple
 BASE_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "defaults.yaml"
 USER_CONFIG_PATH = BASE_DIR / "config" / "user_settings.yaml"
+YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=android"
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | N
     dest_dir = Path(dest_dir or BASE_DIR / "static" / "captures")
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    rc, stdout, _ = run_cmd(["yt-dlp", "-g", "-f", "best", url])
+    rc, stdout, _ = run_cmd(["yt-dlp", "-g", "-f", "best", "--extractor-args", YOUTUBE_EXTRACTOR_ARGS, url])
     if rc != 0 or not stdout.strip():
         return None, "스트리밍 URL을 확인하지 못했습니다. 링크가 올바른지 확인하세요."
 
@@ -166,6 +167,8 @@ def _yt_common_opts(
         str(download_dir / DEFAULT_OUTPUT_TEMPLATE),
         "--no-playlist",
         "--no-progress",
+        "--extractor-args",
+        YOUTUBE_EXTRACTOR_ARGS,
         "-f",
         format_selector,
     ]
