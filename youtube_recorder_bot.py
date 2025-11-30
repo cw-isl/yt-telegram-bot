@@ -12,7 +12,7 @@ import json
 import os
 import shutil
 import subprocess
-import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Tuple
 
@@ -114,7 +114,12 @@ def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | N
         return None, "스트리밍 URL을 확인하지 못했습니다. 링크가 올바른지 확인하세요."
 
     stream_url = stdout.splitlines()[0].strip()
-    output_path = dest_dir / f"capture-{uuid.uuid4().hex[:8]}.png"
+    timestamp = datetime.now().strftime("%y%m%d_%H:%M:%S")
+    output_path = dest_dir / f"{timestamp}.png"
+    suffix = 1
+    while output_path.exists():
+        output_path = dest_dir / f"{timestamp}_{suffix}.png"
+        suffix += 1
 
     rc, _, _ = run_cmd(
         [
