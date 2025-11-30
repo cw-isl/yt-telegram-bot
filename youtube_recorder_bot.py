@@ -29,6 +29,17 @@ def _load_config(path: Path) -> dict:
     return {}
 
 
+def _ensure_local_paths(settings: dict) -> None:
+    """Create configured local directories when they are missing."""
+
+    for key in ("recordings", "downloads", "captures", "transcripts", "summaries"):
+        path_value = settings.get("paths", {}).get(key)
+        if not path_value:
+            continue
+
+        Path(path_value).expanduser().mkdir(parents=True, exist_ok=True)
+
+
 def load_settings() -> dict:
     """Load merged defaults + user overrides."""
     defaults = _load_config(DEFAULT_CONFIG_PATH)
@@ -37,6 +48,7 @@ def load_settings() -> dict:
     for section in ("paths", "auth"):
         merged[section] = {**defaults.get(section, {}), **overrides.get(section, {})}
     merged.setdefault("ui", defaults.get("ui", {}))
+    _ensure_local_paths(merged)
     return merged
 
 

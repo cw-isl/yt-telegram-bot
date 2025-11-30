@@ -153,13 +153,18 @@
           <h6 class="text-muted mb-2">녹화 · 다운로드 저장소</h6>
         </div>
         <div class="col-md-4">
-          <label class="form-label">다운로드 저장 위치</label>
+          <label class="form-label">링크 다운로드 저장 위치</label>
           <input class="form-control" name="downloads" value="{{ settings.paths.downloads }}" />
         </div>
         <div class="col-md-4">
           <label class="form-label">라이브 녹화 저장</label>
           <input class="form-control" name="recordings" value="{{ settings.paths.recordings }}" />
         </div>
+        <div class="col-md-4">
+          <label class="form-label">캡처 저장 위치</label>
+          <input class="form-control" name="captures" value="{{ settings.paths.captures }}" />
+        </div>
+
         <div class="col-md-4">
           <label class="form-label">전사 저장 위치</label>
           <input class="form-control" name="transcripts" value="{{ settings.paths.transcripts }}" />
