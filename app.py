@@ -10,7 +10,14 @@ from flask import Flask, abort, flash, jsonify, redirect, render_template, reque
 from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from youtube_recorder_bot import capture_live_frame, load_settings, save_settings, yt_download
+from youtube_recorder_bot import (
+    acquire_onedrive_access_token,
+    capture_live_frame,
+    list_onedrive_folders,
+    load_settings,
+    save_settings,
+    yt_download,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -211,8 +218,11 @@ def download_action():
 
     message = f"다운로드 완료: {result.name}"
     if upload_after:
-        # Placeholder for future upload integration
-        message += " (업로드 예약)"
+        token, token_error = acquire_onedrive_access_token(load_settings().get("auth", {}))
+        if token:
+            message += " (원드라이브 업로드 예약)"
+        else:
+            message += f" (업로드 보류: {token_error or 'OneDrive 토큰 필요'})"
 
     flash(message, "success")
     return jsonify({"ok": True, "message": message, "file_name": result.name})
@@ -238,6 +248,17 @@ def summary_action():
     return redirect(url_for("index"))
 
 
+@app.route("/api/onedrive/folders")
+def onedrive_folders():
+    settings = load_settings()
+    folders, error = list_onedrive_folders(settings.get("auth", {}))
+
+    if error:
+        return jsonify({"ok": False, "message": error}), 400
+
+    return jsonify({"ok": True, "folders": folders, "count": len(folders)})
+
+
 @app.route("/settings", methods=["POST"])
 def settings_action():
     current = load_settings()
@@ -255,6 +276,10 @@ def settings_action():
 
     current["auth"]["chatgpt_token"] = request.form.get("chatgpt_token", "")
     current["auth"]["onedrive_account"] = request.form.get("onedrive_account", "")
+    current["auth"]["onedrive_client_id"] = request.form.get("onedrive_client_id", "")
+    current["auth"]["onedrive_client_secret"] = request.form.get("onedrive_client_secret", "")
+    current["auth"]["onedrive_refresh_token"] = request.form.get("onedrive_refresh_token", "")
+    current["auth"]["onedrive_tenant"] = request.form.get("onedrive_tenant", "common")
 
     save_settings(current)
     flash("설정이 저장되었습니다.", "success")
