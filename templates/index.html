@@ -175,34 +175,34 @@
           <input class="form-control" name="summaries" value="{{ settings.paths.summaries }}" />
         </div>
         <div class="col-12">
-          <h6 class="text-muted mb-2">자동 업로드 경로</h6>
+          <h6 class="text-muted mb-2">자동 업로드 경로 (Google Drive)</h6>
         </div>
         <div class="col-md-4">
-          <label class="form-label">전사 업로드 경로 (OneDrive)</label>
+          <label class="form-label">전사 업로드 경로</label>
           <div class="input-group mb-1">
-            <input class="form-control onedrive-path-input" name="transcript_upload" id="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
-            <button class="btn btn-outline-secondary onedrive-path-button" data-target="transcript-upload-select" type="button">경로 불러오기</button>
+            <input class="form-control gdrive-path-input" name="transcript_upload" id="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="transcript-upload-select" type="button">경로 불러오기</button>
           </div>
-          <select class="form-select onedrive-path-select d-none" id="transcript-upload-select" data-bind-input="transcript_upload"></select>
-          <small class="text-muted">원드라이브에서 불러온 경로를 선택하면 입력값에 반영됩니다.</small>
+          <select class="form-select gdrive-path-select d-none" id="transcript-upload-select" data-bind-input="transcript_upload"></select>
+          <small class="text-muted">rclone으로 연결된 Google Drive 폴더를 선택하세요.</small>
         </div>
         <div class="col-md-4">
-          <label class="form-label">요약 업로드 경로 (OneDrive)</label>
+          <label class="form-label">요약 업로드 경로</label>
           <div class="input-group mb-1">
-            <input class="form-control onedrive-path-input" name="summary_upload" id="summary_upload" value="{{ settings.paths.summary_upload }}" />
-            <button class="btn btn-outline-secondary onedrive-path-button" data-target="summary-upload-select" type="button">경로 불러오기</button>
+            <input class="form-control gdrive-path-input" name="summary_upload" id="summary_upload" value="{{ settings.paths.summary_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="summary-upload-select" type="button">경로 불러오기</button>
           </div>
-          <select class="form-select onedrive-path-select d-none" id="summary-upload-select" data-bind-input="summary_upload"></select>
+          <select class="form-select gdrive-path-select d-none" id="summary-upload-select" data-bind-input="summary_upload"></select>
           <small class="text-muted">폴더를 선택해 요약본 업로드 위치를 고를 수 있습니다.</small>
         </div>
 
         <div class="col-md-6">
           <label class="form-label">일반 업로드 경로</label>
           <div class="input-group mb-1">
-            <input class="form-control onedrive-path-input" name="onedrive_upload" id="onedrive_upload" value="{{ settings.paths.onedrive_upload }}" />
-            <button class="btn btn-outline-secondary onedrive-path-button" data-target="general-upload-select" type="button">경로 불러오기</button>
+            <input class="form-control gdrive-path-input" name="gdrive_upload" id="gdrive_upload" value="{{ settings.paths.gdrive_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="general-upload-select" type="button">경로 불러오기</button>
           </div>
-          <select class="form-select onedrive-path-select d-none" id="general-upload-select" data-bind-input="onedrive_upload"></select>
+          <select class="form-select gdrive-path-select d-none" id="general-upload-select" data-bind-input="gdrive_upload"></select>
           <small class="text-muted">불러온 경로 중 원하는 폴더를 골라 업로드 경로로 설정하세요.</small>
         </div>
         <div class="col-md-3">
@@ -210,30 +210,15 @@
           <input class="form-control" name="chatgpt_token" value="{{ settings.auth.chatgpt_token }}" />
         </div>
         <div class="col-md-3">
-          <label class="form-label">원드라이브 계정</label>
-          <input class="form-control" name="onedrive_account" value="{{ settings.auth.onedrive_account }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">원드라이브 Client ID</label>
-          <input class="form-control" name="onedrive_client_id" value="{{ settings.auth.onedrive_client_id }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">원드라이브 Client Secret</label>
-          <input class="form-control" name="onedrive_client_secret" value="{{ settings.auth.onedrive_client_secret }}" />
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">원드라이브 Refresh Token</label>
-          <input class="form-control" name="onedrive_refresh_token" value="{{ settings.auth.onedrive_refresh_token }}" />
-        </div>
-        <div class="col-md-3">
-          <label class="form-label">테넌트 (미지정 시 common)</label>
-          <input class="form-control" name="onedrive_tenant" value="{{ settings.auth.onedrive_tenant or 'common' }}" />
+          <label class="form-label">rclone 원격 이름 (Google Drive)</label>
+          <input class="form-control" name="gdrive_remote" value="{{ settings.auth.gdrive_remote }}" />
+          <small class="text-muted">기본값: gdrive</small>
         </div>
 
         <div class="col-12 d-flex justify-content-between align-items-center">
           <div>
             <span class="badge bg-light text-dark">자동 업로드</span>
-            <small class="text-muted ms-2">전사/요약 완료 후 OneDrive로 바로 반영됩니다.</small>
+            <small class="text-muted ms-2">전사/요약 완료 후 Google Drive에 바로 반영됩니다.</small>
           </div>
           <button class="btn btn-primary">설정 저장</button>
         </div>
@@ -250,7 +235,7 @@
         <span class="badge bg-secondary">추가 아이디어</span>
       </div>
       <ul class="mb-0">
-        <li>원드라이브 업로드 히스토리 로그 제공</li>
+        <li>Google Drive 업로드 히스토리 로그 제공</li>
         <li>짧은 요약/긴 요약/하이라이트 3단 요약 옵션</li>
         <li>작업 실패 시 자동 재시도 및 이메일 알림</li>
       </ul>
@@ -459,12 +444,12 @@
   const downloadProgress = document.getElementById("download-progress");
   const progressBar = document.getElementById("download-progress-bar");
   const downloadStatus = document.getElementById("download-status");
-  const onedriveButtons = document.querySelectorAll(".onedrive-path-button");
-  const onedriveSelects = document.querySelectorAll(".onedrive-path-select");
-  let cachedOnedrivePaths = null;
+  const gdriveButtons = document.querySelectorAll(".gdrive-path-button");
+  const gdriveSelects = document.querySelectorAll(".gdrive-path-select");
+  let cachedGdrivePaths = null;
 
   const bindSelectsToInputs = () => {
-    onedriveSelects.forEach((select) => {
+    gdriveSelects.forEach((select) => {
       const inputId = select.dataset.bindInput;
       const targetInput = inputId ? document.getElementById(inputId) : null;
       if (!targetInput) return;
@@ -476,8 +461,8 @@
     });
   };
 
-  const populateOnedriveSelects = (paths) => {
-    onedriveSelects.forEach((select) => {
+  const populateGdriveSelects = (paths) => {
+    gdriveSelects.forEach((select) => {
       select.innerHTML = "";
       const placeholder = document.createElement("option");
       placeholder.value = "";
@@ -493,8 +478,8 @@
     });
   };
 
-  const loadOnedrivePaths = async (triggerButton) => {
-    if (cachedOnedrivePaths) return cachedOnedrivePaths;
+  const loadGdrivePaths = async (triggerButton) => {
+    if (cachedGdrivePaths) return cachedGdrivePaths;
     const originalText = triggerButton?.textContent;
     if (triggerButton) {
       triggerButton.disabled = true;
@@ -502,16 +487,16 @@
     }
 
     try {
-      const response = await fetch("{{ url_for('onedrive_folders') }}");
+      const response = await fetch("{{ url_for('gdrive_folders') }}");
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
-        throw new Error(payload.message || "원드라이브 경로를 불러오지 못했습니다.");
+        throw new Error(payload.message || "Google Drive 경로를 불러오지 못했습니다.");
       }
-      cachedOnedrivePaths = payload.folders || [];
-      populateOnedriveSelects(cachedOnedrivePaths);
-      return cachedOnedrivePaths;
+      cachedGdrivePaths = payload.folders || [];
+      populateGdriveSelects(cachedGdrivePaths);
+      return cachedGdrivePaths;
     } catch (error) {
-      alert(error.message || "OneDrive 호출 중 오류가 발생했습니다.");
+      alert(error.message || "Google Drive 호출 중 오류가 발생했습니다.");
       return [];
     } finally {
       if (triggerButton) {
@@ -521,15 +506,15 @@
     }
   };
 
-  const setupOnedriveButtons = () => {
+  const setupGdriveButtons = () => {
     bindSelectsToInputs();
-    onedriveButtons.forEach((button) => {
+    gdriveButtons.forEach((button) => {
       const targetId = button.dataset.target;
       const select = targetId ? document.getElementById(targetId) : null;
       if (!select) return;
 
       button.addEventListener("click", async () => {
-        await loadOnedrivePaths(button);
+        await loadGdrivePaths(button);
         select.classList.remove("d-none");
         select.scrollIntoView({ behavior: "smooth", block: "nearest" });
       });
@@ -590,6 +575,6 @@
     });
   }
 
-  setupOnedriveButtons();
+  setupGdriveButtons();
 </script>
 {% endblock %}

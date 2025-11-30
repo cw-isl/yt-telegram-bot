@@ -5,20 +5,16 @@
     "captures": "/root/rcbot/downloads/recordings",
     "transcripts": "/root/rcbot/downloads/transcripts",
     "summaries": "/root/rcbot/downloads/summaries",
-    "onedrive_upload": "oneDrive/yt-bot",
-    "transcript_upload": "oneDrive/yt-bot/transcripts",
-    "summary_upload": "oneDrive/yt-bot/summaries"
+    "gdrive_upload": "GoogleDrive/yt-bot",
+    "transcript_upload": "GoogleDrive/yt-bot/transcripts",
+    "summary_upload": "GoogleDrive/yt-bot/summaries"
   },
   "auth": {
     "chatgpt_token": "",
-    "onedrive_account": "",
-    "onedrive_client_id": "",
-    "onedrive_client_secret": "",
-    "onedrive_refresh_token": "",
-    "onedrive_tenant": "common"
+    "gdrive_remote": "gdrive"
   },
   "ui": {
-    "onedrive_categories": [
+    "gdrive_categories": [
       {
         "name": "회의",
         "files": [

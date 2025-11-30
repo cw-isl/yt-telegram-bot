@@ -22,8 +22,8 @@ BASE_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "defaults.yaml"
 USER_CONFIG_PATH = BASE_DIR / "config" / "user_settings.yaml"
 YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=android"
-ONEDRIVE_GRAPH_URL = "https://graph.microsoft.com/v1.0"
-ONEDRIVE_TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+RCLONE_BIN = os.getenv("RCLONE_BIN", "rclone")
+DEFAULT_GDRIVE_REMOTE = "gdrive"
 
 
 # ---------------------------------------------------------------------------
@@ -54,86 +54,79 @@ def load_settings() -> dict:
     for section in ("paths", "auth"):
         merged[section] = {**defaults.get(section, {}), **overrides.get(section, {})}
     merged.setdefault("ui", defaults.get("ui", {}))
+
+    # Backward compatibility: migrate legacy OneDrive keys to Google Drive
+    paths = merged.get("paths", {})
+    if "gdrive_upload" not in paths and "onedrive_upload" in paths:
+        paths["gdrive_upload"] = paths.get("onedrive_upload")
+    auth = merged.get("auth", {})
+    if "gdrive_remote" not in auth and "onedrive_account" in auth:
+        auth["gdrive_remote"] = DEFAULT_GDRIVE_REMOTE
+    merged["paths"] = paths
+    merged["auth"] = auth
     _ensure_local_paths(merged)
     return merged
 
 
 # ---------------------------------------------------------------------------
-# OneDrive helpers
+# Google Drive helpers (via rclone)
 # ---------------------------------------------------------------------------
-def _onedrive_auth_settings(auth: dict) -> dict:
-    return {
-        "client_id": auth.get("onedrive_client_id", "").strip(),
-        "client_secret": auth.get("onedrive_client_secret", "").strip(),
-        "refresh_token": auth.get("onedrive_refresh_token", "").strip(),
-        "tenant": (auth.get("onedrive_tenant") or "common").strip() or "common",
-        "account": auth.get("onedrive_account", ""),
-    }
+def _gdrive_remote_name(auth: dict) -> str:
+    return auth.get("gdrive_remote", DEFAULT_GDRIVE_REMOTE).strip() or DEFAULT_GDRIVE_REMOTE
 
 
-def acquire_onedrive_access_token(auth: dict) -> tuple[str | None, str | None]:
-    """Exchange a refresh token for a short-lived access token."""
+def acquire_gdrive_access(auth: dict) -> tuple[bool, str | None]:
+    """Check whether the configured rclone remote is ready."""
 
-    config = _onedrive_auth_settings(auth)
-    if not (config["client_id"] and config["client_secret"] and config["refresh_token"]):
-        return None, "클라이언트 ID/시크릿/리프레시 토큰을 설정에서 입력해주세요."
+    remote = _gdrive_remote_name(auth)
+    conf_path = Path(os.getenv("RCLONE_CONFIG", Path.home() / ".config" / "rclone" / "rclone.conf"))
+    if not conf_path.exists():
+        return False, "rclone.conf가 없습니다. rclone config로 Google Drive를 먼저 연결하세요."
 
-    payload = {
-        "client_id": config["client_id"],
-        "client_secret": config["client_secret"],
-        "refresh_token": config["refresh_token"],
-        "grant_type": "refresh_token",
-        "scope": "https://graph.microsoft.com/.default offline_access",
-    }
-    token_url = ONEDRIVE_TOKEN_URL.format(tenant=config["tenant"])
+    rc, stdout, stderr = run_cmd([RCLONE_BIN, "listremotes"])
+    if rc != 0:
+        return False, stderr or stdout or "rclone 원격 목록을 불러오지 못했습니다."
 
-    try:
-        resp = requests.post(token_url, data=payload, timeout=15)
-        if resp.status_code != 200:
-            return None, f"토큰 갱신에 실패했습니다: {resp.text or resp.status_code}"
-        data = resp.json()
-        return data.get("access_token"), None
-    except requests.RequestException as exc:
-        return None, f"토큰 요청 중 오류가 발생했습니다: {exc}"
+    remotes = [line.rstrip(":") for line in stdout.splitlines() if line.strip()]
+    if remote not in remotes:
+        return False, f"'{remote}' 원격을 rclone config에서 추가한 뒤 다시 시도하세요."
+
+    return True, None
 
 
-def _list_drive_children(token: str, path: str | None = None) -> tuple[list[dict] | None, str | None]:
-    headers = {"Authorization": f"Bearer {token}"}
-    if path:
-        url = f"{ONEDRIVE_GRAPH_URL}/me/drive/root:/{path}:/children"
-    else:
-        url = f"{ONEDRIVE_GRAPH_URL}/me/drive/root/children"
+def _list_gdrive_children(remote: str, path: str | None = None) -> tuple[list[str] | None, str | None]:
+    target = f"{remote}:{path}" if path else f"{remote}:"
+    rc, stdout, stderr = run_cmd([RCLONE_BIN, "lsjson", "--dirs-only", target])
+    if rc != 0:
+        return None, stderr or stdout or "Google Drive 폴더 조회에 실패했습니다."
 
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code != 200:
-            return None, f"OneDrive 경로 조회 실패: {resp.text or resp.status_code}"
-        data = resp.json()
-        return data.get("value", []), None
-    except requests.RequestException as exc:
-        return None, f"OneDrive 통신 오류: {exc}"
+        entries = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None, "rclone lsjson 결과를 해석하지 못했습니다."
+
+    return [item.get("Name") for item in entries if item.get("IsDir")], None
 
 
-def list_onedrive_folders(auth: dict, *, max_depth: int = 3, limit: int = 200) -> tuple[list[str], str | None]:
-    """Return a flat list of folder paths accessible to the account."""
+def list_gdrive_folders(auth: dict, *, max_depth: int = 3, limit: int = 200) -> tuple[list[str], str | None]:
+    """Return a flat list of folder paths accessible to the rclone remote."""
 
-    token, error = acquire_onedrive_access_token(auth)
-    if error or not token:
-        return [], error or "원드라이브 토큰을 가져오지 못했습니다."
+    ok, error = acquire_gdrive_access(auth)
+    if error or not ok:
+        return [], error or "Google Drive 연결을 확인하세요."
 
+    remote = _gdrive_remote_name(auth)
     folders: list[str] = []
     queue: list[tuple[str, int]] = [("", 0)]
 
     while queue:
         current_path, depth = queue.pop(0)
-        children, err = _list_drive_children(token, current_path or None)
+        children, err = _list_gdrive_children(remote, current_path or None)
         if err:
             return folders, err
 
-        for item in children or []:
-            if "folder" not in item:
-                continue
-            child_path = f"{current_path}/{item['name']}" if current_path else item["name"]
+        for name in children or []:
+            child_path = f"{current_path}/{name}" if current_path else name
             folders.append(child_path)
             if depth + 1 < max_depth and len(folders) < limit:
                 queue.append((child_path, depth + 1))
