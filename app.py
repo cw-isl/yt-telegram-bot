@@ -6,7 +6,8 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
+from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from youtube_recorder_bot import capture_live_frame, load_settings, save_settings, yt_download
@@ -157,6 +158,8 @@ def record_live_action():
 def capture_live_action():
     payload = request.get_json(silent=True) or {}
     live_url = (payload.get("live_url") or "").strip()
+    settings = load_settings()
+    capture_dir = Path(settings.get("paths", {}).get("captures") or BASE_DIR / "static" / "captures")
 
     if not live_url:
         return jsonify({"ok": False, "message": "라이브 주소를 입력한 뒤 캡처하세요."}), 400
@@ -164,12 +167,24 @@ def capture_live_action():
     if not _looks_like_live_url(live_url):
         return jsonify({"ok": False, "message": "유튜브 라이브 링크가 맞는지 확인하세요."}), 400
 
-    output_path, error = capture_live_frame(live_url)
+    output_path, error = capture_live_frame(live_url, capture_dir)
     if error or not output_path:
         return jsonify({"ok": False, "message": error or "캡처에 실패했습니다."}), 500
 
-    public_url = url_for("static", filename=f"captures/{output_path.name}")
+    public_url = url_for("serve_capture", filename=output_path.name)
     return jsonify({"ok": True, "message": f"서버에서 캡처를 완료했습니다: {output_path.name}", "image_url": public_url})
+
+
+@app.route("/captures/<path:filename>")
+def serve_capture(filename: str):
+    settings = load_settings()
+    capture_dir = Path(settings.get("paths", {}).get("captures") or BASE_DIR / "static" / "captures").expanduser().resolve()
+    file_path = (capture_dir / filename).resolve()
+
+    if not str(file_path).startswith(str(capture_dir)) or not file_path.exists():
+        abort(404)
+
+    return send_from_directory(capture_dir, file_path.name)
 
 
 @app.route("/download", methods=["POST"])
@@ -222,6 +237,7 @@ def settings_action():
     current.setdefault("auth", {})
 
     current["paths"]["recordings"] = request.form.get("recordings", current["paths"].get("recordings"))
+    current["paths"]["captures"] = request.form.get("captures", current["paths"].get("captures"))
     current["paths"]["downloads"] = request.form.get("downloads", current["paths"].get("downloads"))
     current["paths"]["transcripts"] = request.form.get("transcripts", current["paths"].get("transcripts"))
     current["paths"]["summaries"] = request.form.get("summaries", current["paths"].get("summaries"))

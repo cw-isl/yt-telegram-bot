@@ -1,9 +1,10 @@
 {
   "paths": {
-    "recordings": "recordings",
-    "downloads": "downloads",
-    "transcripts": "transcripts",
-    "summaries": "summaries",
+    "recordings": "/root/rcbot/downloads/live",
+    "downloads": "/root/rcbot/downloads/link",
+    "captures": "/root/rcbot/downloads/recordings",
+    "transcripts": "/root/rcbot/downloads/transcripts",
+    "summaries": "/root/rcbot/downloads/summaries",
     "onedrive_upload": "oneDrive/yt-bot",
     "transcript_upload": "oneDrive/yt-bot/transcripts",
     "summary_upload": "oneDrive/yt-bot/summaries"
