@@ -25,6 +25,7 @@ def test_common_opts_remove_ffmpeg(bot_module):
     opts_no_ffmpeg = bot_module._yt_common_opts(allow_ffmpeg=False)
     assert "--remux-video" not in opts_no_ffmpeg
     assert "--postprocessor-args" not in opts_no_ffmpeg
+    assert "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none]" in opts_no_ffmpeg
 
 
 def test_yt_download_fallback_without_ffmpeg(monkeypatch, tmp_path, bot_module):
@@ -43,8 +44,9 @@ def test_yt_download_fallback_without_ffmpeg(monkeypatch, tmp_path, bot_module):
     monkeypatch.setattr(bot_module, "run_cmd", fake_run_cmd)
     monkeypatch.setattr(bot_module, "_ffmpeg_available", lambda: True)
 
-    result = bot_module.yt_download("https://www.youtube.com/watch?v=abcdefghijk", tmp_path)
+    result, error = bot_module.yt_download("https://www.youtube.com/watch?v=abcdefghijk", tmp_path)
 
+    assert error is None
     assert result is not None
     assert result.exists()
     assert any("--remux-video" in cmd for cmd in attempts)
