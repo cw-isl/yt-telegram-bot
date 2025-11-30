@@ -11,7 +11,11 @@
   },
   "auth": {
     "chatgpt_token": "",
-    "onedrive_account": ""
+    "onedrive_account": "",
+    "onedrive_client_id": "",
+    "onedrive_client_secret": "",
+    "onedrive_refresh_token": "",
+    "onedrive_tenant": "common"
   },
   "ui": {
     "onedrive_categories": [

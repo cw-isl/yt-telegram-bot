@@ -16,10 +16,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Tuple
 
+import requests
+
 BASE_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "defaults.yaml"
 USER_CONFIG_PATH = BASE_DIR / "config" / "user_settings.yaml"
 YOUTUBE_EXTRACTOR_ARGS = "youtube:player_client=android"
+ONEDRIVE_GRAPH_URL = "https://graph.microsoft.com/v1.0"
+ONEDRIVE_TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +56,92 @@ def load_settings() -> dict:
     merged.setdefault("ui", defaults.get("ui", {}))
     _ensure_local_paths(merged)
     return merged
+
+
+# ---------------------------------------------------------------------------
+# OneDrive helpers
+# ---------------------------------------------------------------------------
+def _onedrive_auth_settings(auth: dict) -> dict:
+    return {
+        "client_id": auth.get("onedrive_client_id", "").strip(),
+        "client_secret": auth.get("onedrive_client_secret", "").strip(),
+        "refresh_token": auth.get("onedrive_refresh_token", "").strip(),
+        "tenant": (auth.get("onedrive_tenant") or "common").strip() or "common",
+        "account": auth.get("onedrive_account", ""),
+    }
+
+
+def acquire_onedrive_access_token(auth: dict) -> tuple[str | None, str | None]:
+    """Exchange a refresh token for a short-lived access token."""
+
+    config = _onedrive_auth_settings(auth)
+    if not (config["client_id"] and config["client_secret"] and config["refresh_token"]):
+        return None, "클라이언트 ID/시크릿/리프레시 토큰을 설정에서 입력해주세요."
+
+    payload = {
+        "client_id": config["client_id"],
+        "client_secret": config["client_secret"],
+        "refresh_token": config["refresh_token"],
+        "grant_type": "refresh_token",
+        "scope": "https://graph.microsoft.com/.default offline_access",
+    }
+    token_url = ONEDRIVE_TOKEN_URL.format(tenant=config["tenant"])
+
+    try:
+        resp = requests.post(token_url, data=payload, timeout=15)
+        if resp.status_code != 200:
+            return None, f"토큰 갱신에 실패했습니다: {resp.text or resp.status_code}"
+        data = resp.json()
+        return data.get("access_token"), None
+    except requests.RequestException as exc:
+        return None, f"토큰 요청 중 오류가 발생했습니다: {exc}"
+
+
+def _list_drive_children(token: str, path: str | None = None) -> tuple[list[dict] | None, str | None]:
+    headers = {"Authorization": f"Bearer {token}"}
+    if path:
+        url = f"{ONEDRIVE_GRAPH_URL}/me/drive/root:/{path}:/children"
+    else:
+        url = f"{ONEDRIVE_GRAPH_URL}/me/drive/root/children"
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None, f"OneDrive 경로 조회 실패: {resp.text or resp.status_code}"
+        data = resp.json()
+        return data.get("value", []), None
+    except requests.RequestException as exc:
+        return None, f"OneDrive 통신 오류: {exc}"
+
+
+def list_onedrive_folders(auth: dict, *, max_depth: int = 3, limit: int = 200) -> tuple[list[str], str | None]:
+    """Return a flat list of folder paths accessible to the account."""
+
+    token, error = acquire_onedrive_access_token(auth)
+    if error or not token:
+        return [], error or "원드라이브 토큰을 가져오지 못했습니다."
+
+    folders: list[str] = []
+    queue: list[tuple[str, int]] = [("", 0)]
+
+    while queue:
+        current_path, depth = queue.pop(0)
+        children, err = _list_drive_children(token, current_path or None)
+        if err:
+            return folders, err
+
+        for item in children or []:
+            if "folder" not in item:
+                continue
+            child_path = f"{current_path}/{item['name']}" if current_path else item["name"]
+            folders.append(child_path)
+            if depth + 1 < max_depth and len(folders) < limit:
+                queue.append((child_path, depth + 1))
+
+        if len(folders) >= limit:
+            break
+
+    return sorted(set(folders)), None
 
 
 def save_settings(data: dict) -> None:

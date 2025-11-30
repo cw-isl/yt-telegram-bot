@@ -179,16 +179,31 @@
         </div>
         <div class="col-md-4">
           <label class="form-label">전사 업로드 경로 (OneDrive)</label>
-          <input class="form-control" name="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
+          <div class="input-group mb-1">
+            <input class="form-control onedrive-path-input" name="transcript_upload" id="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
+            <button class="btn btn-outline-secondary onedrive-path-button" data-target="transcript-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select onedrive-path-select d-none" id="transcript-upload-select" data-bind-input="transcript_upload"></select>
+          <small class="text-muted">원드라이브에서 불러온 경로를 선택하면 입력값에 반영됩니다.</small>
         </div>
         <div class="col-md-4">
           <label class="form-label">요약 업로드 경로 (OneDrive)</label>
-          <input class="form-control" name="summary_upload" value="{{ settings.paths.summary_upload }}" />
+          <div class="input-group mb-1">
+            <input class="form-control onedrive-path-input" name="summary_upload" id="summary_upload" value="{{ settings.paths.summary_upload }}" />
+            <button class="btn btn-outline-secondary onedrive-path-button" data-target="summary-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select onedrive-path-select d-none" id="summary-upload-select" data-bind-input="summary_upload"></select>
+          <small class="text-muted">폴더를 선택해 요약본 업로드 위치를 고를 수 있습니다.</small>
         </div>
 
         <div class="col-md-6">
           <label class="form-label">일반 업로드 경로</label>
-          <input class="form-control" name="onedrive_upload" value="{{ settings.paths.onedrive_upload }}" />
+          <div class="input-group mb-1">
+            <input class="form-control onedrive-path-input" name="onedrive_upload" id="onedrive_upload" value="{{ settings.paths.onedrive_upload }}" />
+            <button class="btn btn-outline-secondary onedrive-path-button" data-target="general-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select onedrive-path-select d-none" id="general-upload-select" data-bind-input="onedrive_upload"></select>
+          <small class="text-muted">불러온 경로 중 원하는 폴더를 골라 업로드 경로로 설정하세요.</small>
         </div>
         <div class="col-md-3">
           <label class="form-label">ChatGPT 토큰</label>
@@ -197,6 +212,22 @@
         <div class="col-md-3">
           <label class="form-label">원드라이브 계정</label>
           <input class="form-control" name="onedrive_account" value="{{ settings.auth.onedrive_account }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">원드라이브 Client ID</label>
+          <input class="form-control" name="onedrive_client_id" value="{{ settings.auth.onedrive_client_id }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">원드라이브 Client Secret</label>
+          <input class="form-control" name="onedrive_client_secret" value="{{ settings.auth.onedrive_client_secret }}" />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">원드라이브 Refresh Token</label>
+          <input class="form-control" name="onedrive_refresh_token" value="{{ settings.auth.onedrive_refresh_token }}" />
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">테넌트 (미지정 시 common)</label>
+          <input class="form-control" name="onedrive_tenant" value="{{ settings.auth.onedrive_tenant or 'common' }}" />
         </div>
 
         <div class="col-12 d-flex justify-content-between align-items-center">
@@ -428,6 +459,82 @@
   const downloadProgress = document.getElementById("download-progress");
   const progressBar = document.getElementById("download-progress-bar");
   const downloadStatus = document.getElementById("download-status");
+  const onedriveButtons = document.querySelectorAll(".onedrive-path-button");
+  const onedriveSelects = document.querySelectorAll(".onedrive-path-select");
+  let cachedOnedrivePaths = null;
+
+  const bindSelectsToInputs = () => {
+    onedriveSelects.forEach((select) => {
+      const inputId = select.dataset.bindInput;
+      const targetInput = inputId ? document.getElementById(inputId) : null;
+      if (!targetInput) return;
+      select.addEventListener("change", () => {
+        if (select.value) {
+          targetInput.value = select.value;
+        }
+      });
+    });
+  };
+
+  const populateOnedriveSelects = (paths) => {
+    onedriveSelects.forEach((select) => {
+      select.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "폴더를 선택하세요";
+      select.appendChild(placeholder);
+
+      paths.forEach((path) => {
+        const option = document.createElement("option");
+        option.value = path;
+        option.textContent = path;
+        select.appendChild(option);
+      });
+    });
+  };
+
+  const loadOnedrivePaths = async (triggerButton) => {
+    if (cachedOnedrivePaths) return cachedOnedrivePaths;
+    const originalText = triggerButton?.textContent;
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.textContent = "불러오는 중...";
+    }
+
+    try {
+      const response = await fetch("{{ url_for('onedrive_folders') }}");
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "원드라이브 경로를 불러오지 못했습니다.");
+      }
+      cachedOnedrivePaths = payload.folders || [];
+      populateOnedriveSelects(cachedOnedrivePaths);
+      return cachedOnedrivePaths;
+    } catch (error) {
+      alert(error.message || "OneDrive 호출 중 오류가 발생했습니다.");
+      return [];
+    } finally {
+      if (triggerButton) {
+        triggerButton.disabled = false;
+        triggerButton.textContent = originalText || "경로 불러오기";
+      }
+    }
+  };
+
+  const setupOnedriveButtons = () => {
+    bindSelectsToInputs();
+    onedriveButtons.forEach((button) => {
+      const targetId = button.dataset.target;
+      const select = targetId ? document.getElementById(targetId) : null;
+      if (!select) return;
+
+      button.addEventListener("click", async () => {
+        await loadOnedrivePaths(button);
+        select.classList.remove("d-none");
+        select.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    });
+  };
 
   if (downloadForm) {
     let timerId;
@@ -482,5 +589,7 @@
       }
     });
   }
+
+  setupOnedriveButtons();
 </script>
 {% endblock %}
