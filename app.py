@@ -11,9 +11,9 @@ from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from youtube_recorder_bot import (
-    acquire_onedrive_access_token,
+    acquire_gdrive_access,
     capture_live_frame,
-    list_onedrive_folders,
+    list_gdrive_folders,
     load_settings,
     save_settings,
     yt_download,
@@ -130,7 +130,7 @@ def _looks_like_live_url(url: str) -> bool:
 @app.route("/")
 def index():
     settings = load_settings()
-    categories: List[dict] = settings.get("ui", {}).get("onedrive_categories", [])
+    categories: List[dict] = settings.get("ui", {}).get("gdrive_categories", [])
     jobs = _jobs_state()
     return render_template(
         "index.html",
@@ -218,11 +218,11 @@ def download_action():
 
     message = f"다운로드 완료: {result.name}"
     if upload_after:
-        token, token_error = acquire_onedrive_access_token(load_settings().get("auth", {}))
-        if token:
-            message += " (원드라이브 업로드 예약)"
+        ok, token_error = acquire_gdrive_access(load_settings().get("auth", {}))
+        if ok:
+            message += " (Google Drive 업로드 예약)"
         else:
-            message += f" (업로드 보류: {token_error or 'OneDrive 토큰 필요'})"
+            message += f" (업로드 보류: {token_error or 'Google Drive 연결 필요'})"
 
     flash(message, "success")
     return jsonify({"ok": True, "message": message, "file_name": result.name})
@@ -248,10 +248,10 @@ def summary_action():
     return redirect(url_for("index"))
 
 
-@app.route("/api/onedrive/folders")
-def onedrive_folders():
+@app.route("/api/gdrive/folders")
+def gdrive_folders():
     settings = load_settings()
-    folders, error = list_onedrive_folders(settings.get("auth", {}))
+    folders, error = list_gdrive_folders(settings.get("auth", {}))
 
     if error:
         return jsonify({"ok": False, "message": error}), 400
@@ -270,16 +270,12 @@ def settings_action():
     current["paths"]["downloads"] = request.form.get("downloads", current["paths"].get("downloads"))
     current["paths"]["transcripts"] = request.form.get("transcripts", current["paths"].get("transcripts"))
     current["paths"]["summaries"] = request.form.get("summaries", current["paths"].get("summaries"))
-    current["paths"]["onedrive_upload"] = request.form.get("onedrive_upload", current["paths"].get("onedrive_upload"))
+    current["paths"]["gdrive_upload"] = request.form.get("gdrive_upload", current["paths"].get("gdrive_upload"))
     current["paths"]["transcript_upload"] = request.form.get("transcript_upload", current["paths"].get("transcript_upload"))
     current["paths"]["summary_upload"] = request.form.get("summary_upload", current["paths"].get("summary_upload"))
 
     current["auth"]["chatgpt_token"] = request.form.get("chatgpt_token", "")
-    current["auth"]["onedrive_account"] = request.form.get("onedrive_account", "")
-    current["auth"]["onedrive_client_id"] = request.form.get("onedrive_client_id", "")
-    current["auth"]["onedrive_client_secret"] = request.form.get("onedrive_client_secret", "")
-    current["auth"]["onedrive_refresh_token"] = request.form.get("onedrive_refresh_token", "")
-    current["auth"]["onedrive_tenant"] = request.form.get("onedrive_tenant", "common")
+    current["auth"]["gdrive_remote"] = request.form.get("gdrive_remote", current["auth"].get("gdrive_remote", ""))
 
     save_settings(current)
     flash("설정이 저장되었습니다.", "success")
@@ -309,7 +305,7 @@ def percent_class(value: int) -> str:
 @app.route("/ideas")
 def ideas():
     suggested = [
-        "원드라이브 업로드 히스토리 로그",
+        "Google Drive 업로드 히스토리 로그",
         "여러 요약 버전(짧게/길게) 병렬 생성",
         "자동 재시도 스케줄링 및 이메일 알림",
     ]

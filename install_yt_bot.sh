@@ -9,7 +9,7 @@ set -euo pipefail
 # - env file (escaped + LANG/LC_ALL)
 # - fetch bot code from GitHub Raw
 # - systemd unit (uses venv python)
-# - admin CLI (yt-botctl, env editor + OneDrive helper)
+# - admin CLI (yt-botctl, env editor + Google Drive helper)
 # ==============================
 
 NOTICE_URL="http://mmm.com"   # TODO: replace with real guide URL
@@ -53,8 +53,8 @@ ensure_root
 # ------------------------------------------------------------------------------
 say "=== Pre-checks ==="
 ask_yn "Did you create a Telegram bot token?" || { echo "See: $NOTICE_URL"; exit 1; }
-ask_yn "Do you have your OneDrive rclone JSON ready?" || { echo "See: $NOTICE_URL"; exit 1; }
-ask_yn "Do you understand that this setup uses rclone for OneDrive only?" || { echo "See: $NOTICE_URL"; exit 1; }
+ask_yn "Do you have your Google Drive rclone JSON ready?" || { echo "See: $NOTICE_URL"; exit 1; }
+ask_yn "Do you understand that this setup uses rclone for Google Drive only?" || { echo "See: $NOTICE_URL"; exit 1; }
 ask_yn "Do you already have a Gemini API key?" || { echo "See: $NOTICE_URL"; exit 1; }
 
 # ------------------------------------------------------------------------------
@@ -123,8 +123,8 @@ ENV_FILE="/etc/yt-bot/yt-bot.env"
 read -r -p "BOT_TOKEN (optional, press Enter to skip): " RAW_BOT_TOKEN || true
 read -r -p "GEMINI_API_KEY (optional, Enter to skip): " RAW_GEMINI || true
 
-# RCLONE_REMOTE is fixed to 'onedrive'
-RCLONE_REMOTE="onedrive"
+# RCLONE_REMOTE is fixed to 'gdrive'
+RCLONE_REMOTE="gdrive"
 
 read -r -p "RCLONE_FOLDER_VIDEOS [default: YouTube_Backup]: " RCLONE_FOLDER_VIDEOS || true
 RCLONE_FOLDER_VIDEOS="${RCLONE_FOLDER_VIDEOS:-YouTube_Backup}"
@@ -160,9 +160,9 @@ fi
 # 5) rclone note
 # ------------------------------------------------------------------------------
 say "=== rclone note ==="
-echo "Remote name is fixed to 'onedrive'."
-echo "Use 'yt-botctl' → 'Install rclone & open rclone config' to install/refresh rclone,"
-echo "then pick your drive inside the wizard."
+echo "Remote name is fixed to 'gdrive' (Google Drive)."
+echo "Use 'yt-botctl' → 'Install rclone & open rclone config' to install/refresh rclone," 
+echo "then pick your Google Drive inside the wizard."
 
 # ------------------------------------------------------------------------------
 # 6) Fetch bot code (from GitHub Raw or local path)
@@ -223,7 +223,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 8) Admin CLI (yt-botctl) — env editor + OneDrive helper
+# 8) Admin CLI (yt-botctl) — env editor + Google Drive helper
 # ------------------------------------------------------------------------------
 say "=== Create admin CLI (yt-botctl) ==="
 cat > /usr/local/bin/yt-botctl <<'EOF'
@@ -233,8 +233,7 @@ set -euo pipefail
 ENV_DIR="/etc/yt-bot"
 ENV_FILE="$ENV_DIR/yt-bot.env"
 UNIT="youtube_bot.service"
-FIXED_REMOTE="onedrive"
-GRAPH="https://graph.microsoft.com/v1.0"
+FIXED_REMOTE="gdrive"
 
 ensure_env_file() {
   sudo mkdir -p "$ENV_DIR"
@@ -246,8 +245,8 @@ BOT_TOKEN=""
 # Gemini API key (optional – set later via yt-botctl)
 GEMINI_API_KEY=""
 
-# Rclone settings (remote name is fixed to 'onedrive')
-RCLONE_REMOTE="onedrive"
+# Rclone settings (remote name is fixed to 'gdrive')
+RCLONE_REMOTE="gdrive"
 RCLONE_FOLDER_VIDEOS="YouTube_Backup"
 RCLONE_FOLDER_TRANSCRIPTS="YouTube_Backup/Transcripts"
 
@@ -291,12 +290,12 @@ rclone_install_and_config() {
   conf="$(rclone_conf_path)"; dir="$(dirname "$conf")"
 
   sudo -u "$user" mkdir -p "$dir"
-  # onedrive 섹션이 없으면 최소 스텁 생성
+  # gdrive 섹션이 없으면 최소 스텁 생성
   if ! grep -q "^\[${FIXED_REMOTE}\]" "$conf" 2>/dev/null; then
-    echo "Creating minimal onedrive remote stub at $conf"
+    echo "Creating minimal gdrive remote stub at $conf"
     sudo tee -a "$conf" >/dev/null <<EOT
 [${FIXED_REMOTE}]
-type = onedrive
+type = drive
 EOT
     sudo chown "$user":"$user" "$conf"
     sudo chmod 600 "$conf"
@@ -353,127 +352,16 @@ os.chmod(env_path, 0o600)
 PY
 }
 
-# --- (선택) 드라이브 자동 선택 도구들: 유지 ---
-get_access_token_from_conf() {
-  local conf="$1"
-  local token_json
-  token_json="$(awk -v sec="[$FIXED_REMOTE]" '
-    $0==sec {ins=1; next}
-    /^\[.*\]$/ {if(ins) exit; next}
-    ins && $1=="token" && $2=="=" {sub(/^[^=]*=[[:space:]]*/,""); print; exit}
-  ' "$conf" 2>/dev/null || true)"
-  [ -z "${token_json:-}" ] && { echo ""; return 1; }
-  jq -r '.access_token // empty' <<<"$token_json"
-}
-
-graph_list_drives() {
-  local at="$1"
-  local ok=1 out
-  if out="$(curl -fsS -H "Authorization: Bearer $at" "https://graph.microsoft.com/v1.0/me/drives" 2>/dev/null)"; then
-    echo "$out" | jq -r '.value[] | [.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
-    ok=0
-  fi
-  if [ $ok -ne 0 ]; then
-    if out="$(curl -fsS -H "Authorization: Bearer $at" "https://graph.microsoft.com/v1.0/me/drive" 2>/dev/null)"; then
-      echo "$out" | jq -r '[.id, .driveType, (.name // "")] | @tsv' 2>/dev/null || true
-      ok=0
-    fi
-  fi
-  return $ok
-}
-
-select_onedrive_drive() {
-  local user conf
+# --- (선택) Google Drive 드라이브 확인 도구 ---
+select_gdrive_drive() {
+  local user
   user="$(svc_user)"
-  conf="$(rclone_conf_path)"
 
-  echo "Querying drives..."
-  declare -a lines; lines=()
-  access_token="$(get_access_token_from_conf "$conf" || true)"
-  if [ -n "${access_token:-}" ]; then
-    if mapfile -t lines < <(graph_list_drives "$access_token"); then :; fi
-  fi
-  if [ "${#lines[@]}" -eq 0 ]; then
-    if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" -o format=json >/tmp/ytb_drives.json 2>/dev/null; then
-      if jq -e '.drives|length>0' >/dev/null 2>&1 </tmp/ytb_drives.json; then
-        mapfile -t lines < <(jq -r '.drives[] | "\(.id)\t\(.driveType)\t\(.name // "")"' /tmp/ytb_drives.json)
-      fi
-    fi
-  fi
-  if [ "${#lines[@]}" -eq 0 ]; then
-    if mapfile -t _raw < <(sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:" 2>/dev/null); then
-      declare -a parsed; parsed=()
-      local ln _id _type _name
-      for ln in "${_raw[@]}"; do
-        _id="$(echo "$ln"   | sed -nE 's/.*id=([^ ,\)]*).*/\1/p')"
-        _type="$(echo "$ln" | sed -nE 's/.*driveType=([^ ,\)]*).*/\1/p')"
-        _name="$(echo "$ln" | sed -nE 's/.*name=([^,)]*).*/\1/p')"
-        [ -n "$_id" ] && [ -n "$_type" ] && parsed+=("${_id}\t${_type}\t${_name}")
-      done
-      lines=("${parsed[@]}")
-    fi
-  fi
-
-  local id type dname i choice
-  if [ "${#lines[@]}" -gt 0 ]; then
-    echo "Found ${#lines[@]} drive(s):"
-    for ((i=0;i<${#lines[@]};i++)); do
-      IFS=$'\t' read -r id type dname <<<"${lines[$i]}"
-      printf "  %d) id=%s  type=%s  name=%s\n" "$((i+1))" "$id" "$type" "${dname:-?}"
-    done
-    while true; do
-      read -r -p "Pick a number (1-${#lines[@]}), or press Enter to cancel: " choice || true
-      [ -z "$choice" ] && return 1
-      if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#lines[@]}" ]; then
-        IFS=$'\t' read -r id type dname <<<"${lines[$((choice-1))]}"
-        break
-      fi
-    done
+  echo "rclone backend drives ${FIXED_REMOTE}: 로 Google Drive 드라이브 목록을 확인합니다..."
+  if sudo -u "$user" rclone backend drives "${FIXED_REMOTE}:"; then
+    echo "위 목록을 참고해 rclone config에서 원하는 드라이브를 선택하거나 변경하세요."
   else
-    echo "Could not discover drives automatically."
-    read -r -p "Enter drive_id manually: " id
-    read -r -p "Enter drive_type (personal|business|documentLibrary): " type
-  fi
-
-  if [ -z "${id:-}" ] || [ -z "${type:-}" ]; then
-    echo "Empty id/type; canceled."
-    return 1
-  fi
-
-  echo "Writing drive_id/drive_type into: $conf"
-  sudo awk -v sec="${FIXED_REMOTE}" -v id="$id" -v typ="$type" '
-    BEGIN{ insec=0; has_id=0; has_type=0 }
-    /^\[.*\]$/ {
-      if (insec==1 && has_id==0)  print "drive_id = " id
-      if (insec==1 && has_type==0) print "drive_type = " typ
-      insec=0
-    }
-    $0=="["sec"]"{ insec=1 }
-    {
-      if (insec==1) {
-        if ($0 ~ /^drive_id[[:space:]]*=/)   { print "drive_id = " id; has_id=1; next }
-        if ($0 ~ /^drive_type[[:space:]]*=/) { print "drive_type = " typ; has_type=1; next }
-      }
-      print
-    }
-    END {
-      if (insec==1) {
-        if (has_id==0)  print "drive_id = " id
-        if (has_type==0) print "drive_type = " typ
-      }
-    }
-  ' "$conf" | sudo tee "${conf}.tmp" >/dev/null
-
-  sudo mv "${conf}.tmp" "$conf"
-  sudo chown "$user":"$user" "$conf"
-  sudo chmod 600 "$conf"
-
-  echo "Updated. drive_id=${id}, drive_type=${type}"
-  echo "Testing access with new drive_id/type..."
-  if sudo -u "$user" rclone lsd "${FIXED_REMOTE}:" >/dev/null 2>&1; then
-    echo "OK: drive selection works."
-  else
-    echo "WARN: lsd failed; verify the chosen drive has access."
+    echo "드라이브 목록을 불러오지 못했습니다. rclone config를 다시 실행하세요."
   fi
 }
 
@@ -501,7 +389,7 @@ print_settings() {
   WD="$(getv WHISPER_DEVICE)"
   printf "  %-26s = %s\n" "BOT_TOKEN"                 "$(mask "$BT")"
   printf "  %-26s = %s\n" "GEMINI_API_KEY"            "$(mask "$GK")"
-  printf "  %-26s = %s\n" "RCLONE_REMOTE"             "onedrive (fixed)"
+  printf "  %-26s = %s\n" "RCLONE_REMOTE"             "gdrive (fixed)"
   printf "  %-26s = %s\n" "RCLONE_FOLDER_VIDEOS"      "${VF}"
   printf "  %-26s = %s\n" "RCLONE_FOLDER_TRANSCRIPTS" "${TF}"
   printf "  %-26s = %s\n" "BOT_HOME"                  "${BH}"
@@ -542,7 +430,7 @@ Edit which setting?
   7) WHISPER_DEVICE
   8) Ensure rclone remote folders
   9) Install rclone & open rclone config (recommended)
- 10) Select OneDrive drive (list & pick again)
+ 10) Check Google Drive list (Shared Drives/My Drive)
  11) Show ENV file (raw contents)
   0) Back
 EOM
@@ -557,7 +445,7 @@ EOM
       7) key="WHISPER_DEVICE" ;;
       8) ensure_remote_dirs; read -r -p "Enter to continue..." _; continue ;;
       9) rclone_install_and_config; read -r -p "Enter to continue..." _; continue ;;
-     10) select_onedrive_drive; read -r -p "Enter to continue..." _; continue ;;
+     10) select_gdrive_drive; read -r -p "Enter to continue..." _; continue ;;
      11) show_env_all; continue ;;
       0) break ;;
       *) continue ;;
@@ -632,11 +520,11 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 ## Telegram usage
 - Send any video/YouTube URL: download & upload only (no transcript/summary).
 - Live URL: starts recording; send \`/stop\` to finish and upload.
-- \`smr [path]\`: browse OneDrive → select a file → transcribe (Whisper) + summarize (Gemini, Korean) → upload.
+- \`smr [path]\`: browse Google Drive → select a file → transcribe (Whisper) + summarize (Gemini, Korean) → upload.
 
 ## Manage
 - \`yt-botctl\`             : menu
-- \`yt-botctl settings\`    : edit env values / install rclone / configure onedrive
+- \`yt-botctl settings\`    : edit env values / install rclone / configure Google Drive
 - \`yt-botctl status\`      : systemd status
 - \`yt-botctl logs\`        : follow logs
 - \`yt-botctl delete\`      : uninstall
@@ -646,7 +534,7 @@ cat > /opt/yt-bot/README.installed.md <<EOF
 - Env       : /etc/yt-bot/yt-bot.env
 - Logs      : /var/log/yt-bot/bot.log
 - Work home : '"$BOT_HOME"' (recordings/, tmp/, downloads/)
-- rclone    : ~<service-user>/.config/rclone/rclone.conf  (remote name: onedrive)
+- rclone    : ~<service-user>/.config/rclone/rclone.conf  (remote name: gdrive)
 EOF
 
 # ------------------------------------------------------------------------------
