@@ -41,7 +41,7 @@
           </div>
         </div>
       </div>
-      <p class="text-muted small mb-0">라이브 녹화 제어와 링크 다운로드를 완전히 분리했습니다. 녹화 버튼을 눌러도 다운로드 영역에는 영향을 주지 않습니다.</p>
+      <p class="text-muted small mb-0">라이브 링크를 검색하면 스트리밍 화면을 바로 확인하고 서버에서 캡처할 수 있습니다.</p>
     </div>
   </div>
 
@@ -384,62 +384,42 @@
     });
   }
 
-  const stopTracks = (stream) => {
-    if (!stream) return;
-    stream.getTracks().forEach((track) => track.stop());
-  };
-
   const captureLivePreview = async () => {
-    if (!livePreviewFrame || livePreviewFrame.classList.contains("d-none") || !livePreviewFrame.src) {
-      setLiveStatus("검색으로 스트리밍 화면을 불러온 뒤 캡처할 수 있습니다.", "text-danger");
+    const liveUrl = liveUrlInput?.value?.trim();
+    if (!liveUrl) {
+      setLiveStatus("라이브 주소를 입력한 뒤 캡처하세요.", "text-danger");
       return;
     }
 
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      setLiveStatus("브라우저가 화면 캡처를 지원하지 않습니다.", "text-danger");
+    if (!isLiveUrl(liveUrl)) {
+      setLiveStatus("유튜브 라이브 링크가 맞는지 확인하세요.", "text-danger");
       return;
     }
 
-    let stream;
+    setLiveStatus("서버에서 스트리밍을 캡처하는 중입니다...", "text-muted");
+
     try {
-      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 } });
-      const [track] = stream.getVideoTracks();
-      const settings = track?.getSettings?.() || {};
-
-      const video = document.createElement("video");
-      video.srcObject = stream;
-      video.muted = true;
-      await video.play();
-
-      await new Promise((resolve) => {
-        if (video.readyState >= 2) {
-          resolve();
-        } else {
-          video.onloadeddata = () => resolve();
-        }
+      const response = await fetch("{{ url_for('capture_live_action') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ live_url: liveUrl }),
       });
 
-      const canvas = document.createElement("canvas");
-      canvas.width = settings.width || video.videoWidth;
-      canvas.height = settings.height || video.videoHeight;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const payload = await response.json();
+      if (response.ok && payload.ok) {
+        setLiveStatus(payload.message || "캡처 완료", "text-success");
 
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-      if (!blob) throw new Error("blob-failed");
-
-      const downloadUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = downloadUrl;
-      anchor.download = "youtube_capture.png";
-      anchor.click();
-      URL.revokeObjectURL(downloadUrl);
-
-      setLiveStatus("현재 스트리밍 화면을 캡처해 저장했습니다.", "text-success");
+        if (payload.image_url) {
+          const anchor = document.createElement("a");
+          anchor.href = payload.image_url;
+          anchor.download = payload.image_url.split("/").pop() || "capture.png";
+          anchor.click();
+        }
+      } else {
+        setLiveStatus(payload.message || "캡처에 실패했습니다.", "text-danger");
+      }
     } catch (error) {
-      setLiveStatus("화면 캡처가 취소되었거나 실패했습니다.", "text-muted");
-    } finally {
-      stopTracks(stream);
+      setLiveStatus("캡처 요청 중 오류가 발생했습니다.", "text-danger");
     }
   };
 

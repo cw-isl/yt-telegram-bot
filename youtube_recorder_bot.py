@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Iterable, Tuple
 
@@ -55,6 +56,48 @@ def run_cmd(cmd: Iterable[str], **kwargs) -> Tuple[int, str, str]:
 
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
+
+
+def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | None, str | None]:
+    """Capture a single frame from a YouTube live stream.
+
+    Returns (output_path, error_message). When the capture succeeds,
+    error_message is None.
+    """
+
+    if not _ffmpeg_available():
+        return None, "ffmpeg가 설치되어 있지 않아 캡처를 진행할 수 없습니다."
+
+    dest_dir = Path(dest_dir or BASE_DIR / "static" / "captures")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    rc, stdout, _ = run_cmd(["yt-dlp", "-g", "-f", "best", url])
+    if rc != 0 or not stdout.strip():
+        return None, "스트리밍 URL을 확인하지 못했습니다. 링크가 올바른지 확인하세요."
+
+    stream_url = stdout.splitlines()[0].strip()
+    output_path = dest_dir / f"capture-{uuid.uuid4().hex[:8]}.png"
+
+    rc, _, _ = run_cmd(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-ss",
+            "00:00:01",
+            "-i",
+            stream_url,
+            "-frames:v",
+            "1",
+            str(output_path),
+        ]
+    )
+
+    if rc != 0 or not output_path.exists():
+        return None, "캡처 중 오류가 발생했습니다. 스트림 접근 권한 또는 네트워크 상태를 확인하세요."
+
+    return output_path, None
 
 
 # ---------------------------------------------------------------------------
