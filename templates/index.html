@@ -262,17 +262,19 @@
           <span class="badge bg-secondary">Google Drive</span>
         </div>
         <div class="row g-3 align-items-end">
-          <div class="col-md-4">
+          <div class="col-lg-4 col-md-6">
             <label class="form-label">로컬 폴더 (/root/rcbot/downloads)</label>
-            <div class="input-group">
+            <div class="input-group flex-nowrap">
               <select class="form-select" id="local-folder-select">
                 <option value="">폴더를 선택하세요</option>
               </select>
-              <button class="btn btn-outline-secondary" type="button" id="local-folder-refresh">새로고침</button>
+              <input class="form-control" id="local-folder-query" placeholder="폴더 검색" type="search" />
+              <button class="btn btn-outline-secondary" type="button" id="local-folder-search">검색</button>
             </div>
             <small class="text-muted">다운로드/녹화/전사 등 하위 폴더를 고릅니다.</small>
+            <div class="small text-muted mt-2" id="local-folder-search-results">검색어를 입력하고 검색 버튼을 눌러주세요.</div>
           </div>
-          <div class="col-md-4">
+          <div class="col-lg-3 col-md-6">
             <label class="form-label">Google Drive 폴더</label>
             <div class="input-group">
               <select class="form-select gdrive-path-select d-none" id="manual-remote-select">
@@ -282,9 +284,15 @@
             </div>
             <small class="text-muted">rclone에서 불러온 폴더를 선택하세요.</small>
           </div>
-          <div class="col-md-4 d-grid">
-            <button class="btn btn-dark" type="button" id="manual-upload-button" disabled>업로드 시작</button>
-            <small class="text-muted">두 경로를 모두 선택하면 업로드할 수 있습니다.</small>
+          <div class="col-lg-3 col-md-6">
+            <label class="form-label">업로드할 파일</label>
+            <input class="form-control" type="file" id="manual-upload-file" />
+            <small class="text-muted">선택한 파일을 Google Drive로 올립니다.</small>
+          </div>
+          <div class="col-lg-2 col-md-6 d-grid gap-2">
+            <button class="btn btn-dark" type="button" id="manual-upload-button" disabled>폴더 업로드</button>
+            <button class="btn btn-outline-dark" type="button" id="manual-file-upload-button" disabled>파일 업로드</button>
+            <small class="text-muted">Drive 경로를 선택한 뒤 업로드하세요.</small>
           </div>
         </div>
         <div class="progress mt-3 d-none" id="manual-upload-progress">
@@ -519,7 +527,11 @@
   const manualUploadStatus = document.getElementById("manual-upload-status");
   const manualRemoteSelect = document.getElementById("manual-remote-select");
   const localFolderSelect = document.getElementById("local-folder-select");
-  const localFolderRefresh = document.getElementById("local-folder-refresh");
+  const localFolderQueryInput = document.getElementById("local-folder-query");
+  const localFolderSearchButton = document.getElementById("local-folder-search");
+  const localFolderResults = document.getElementById("local-folder-search-results");
+  const manualUploadFileInput = document.getElementById("manual-upload-file");
+  const manualFileUploadButton = document.getElementById("manual-file-upload-button");
   const transcriptFormEl = document.getElementById("transcript-form");
   const summaryFormEl = document.getElementById("summary-form");
   const transcriptProgress = document.getElementById("transcript-progress");
@@ -627,29 +639,76 @@
     });
   };
 
-  const loadLocalFolders = async () => {
+  const renderLocalFolderResults = (folders, baseDir, query) => {
+    if (!localFolderResults) return;
+    localFolderResults.innerHTML = "";
+
+    if (!query) {
+      localFolderResults.textContent = "검색어를 입력하고 검색 버튼을 눌러주세요.";
+      return;
+    }
+
+    if (!folders || !folders.length) {
+      const emptyText = document.createElement("div");
+      emptyText.textContent = `"${query}"에 대한 검색 결과가 없습니다.`;
+      localFolderResults.appendChild(emptyText);
+      return;
+    }
+
+    const header = document.createElement("div");
+    header.className = "text-muted";
+    header.textContent = `${baseDir || "기본 경로"}에서 ${folders.length}개 결과`;
+
+    const list = document.createElement("div");
+    list.className = "d-flex flex-wrap gap-2 mt-1";
+
+    folders.forEach((name) => {
+      const badge = document.createElement("span");
+      badge.className = "badge bg-light text-dark border";
+      badge.textContent = name;
+      list.appendChild(badge);
+    });
+
+    localFolderResults.appendChild(header);
+    localFolderResults.appendChild(list);
+  };
+
+  const loadLocalFolders = async (query = "") => {
     if (!localFolderSelect) return [];
     try {
-      const response = await fetch("{{ url_for('local_folders') }}");
+      const endpoint = new URL("{{ url_for('local_folders') }}", window.location.origin);
+      if (query) {
+        endpoint.searchParams.set("q", query);
+      }
+
+      const response = await fetch(endpoint);
       const payload = await response.json();
       if (!response.ok || !payload.ok) {
         throw new Error(payload.message || "로컬 폴더를 불러오지 못했습니다.");
       }
 
+      const previousValue = localFolderSelect.value;
       localFolderSelect.innerHTML = "";
       const placeholder = document.createElement("option");
       placeholder.value = "";
       placeholder.textContent = "폴더를 선택하세요";
       localFolderSelect.appendChild(placeholder);
 
-      (payload.folders || []).forEach((name) => {
+      const folders = payload.folders || [];
+
+      folders.forEach((name) => {
         const option = document.createElement("option");
         option.value = name;
         option.textContent = name;
         localFolderSelect.appendChild(option);
       });
 
-      return payload.folders || [];
+      if (previousValue && folders.includes(previousValue)) {
+        localFolderSelect.value = previousValue;
+      }
+
+      renderLocalFolderResults(folders, payload.base, query);
+      return folders;
     } catch (error) {
       alert(error.message || "로컬 폴더 목록을 가져오는 중 오류가 발생했습니다.");
       return [];
@@ -661,12 +720,19 @@
     manualUploadButton.disabled = !(localFolderSelect?.value && manualRemoteSelect?.value);
   };
 
+  const updateFileButtonState = () => {
+    if (!manualFileUploadButton) return;
+    const hasFile = !!(manualUploadFileInput?.files && manualUploadFileInput.files.length);
+    manualFileUploadButton.disabled = !(hasFile && manualRemoteSelect?.value);
+  };
+
   const setupManualUpload = () => {
     if (!manualUploadButton) return;
 
     const startBar = () => {
       if (!manualUploadProgress || !manualUploadProgressBar) return null;
       manualUploadProgress.classList.remove("d-none");
+      manualUploadProgressBar.classList.remove("bg-success", "bg-danger");
       manualUploadProgressBar.style.width = "10%";
       return setInterval(() => {
         const current = parseFloat(manualUploadProgressBar.style.width) || 10;
@@ -709,13 +775,61 @@
       }
     };
 
+    const handleFileUpload = async () => {
+      if (!manualUploadFileInput?.files?.length || !manualRemoteSelect?.value) return;
+      manualFileUploadButton.disabled = true;
+      manualUploadStatus.textContent = "파일 업로드 준비 중...";
+      const timer = startBar();
+
+      try {
+        const formData = new FormData();
+        formData.append("file", manualUploadFileInput.files[0]);
+        formData.append("remote_path", manualRemoteSelect.value);
+
+        const response = await fetch("{{ url_for('manual_file_upload') }}", {
+          method: "POST",
+          body: formData,
+        });
+
+        const payload = await response.json();
+        const success = response.ok && payload.ok;
+        finishBar(success);
+        manualUploadStatus.textContent = payload.message || (success ? "파일 업로드 완료" : "파일 업로드에 실패했습니다.");
+      } catch (error) {
+        finishBar(false);
+        manualUploadStatus.textContent = "파일 업로드 중 오류가 발생했습니다.";
+      } finally {
+        manualFileUploadButton.disabled = false;
+        if (timer) clearInterval(timer);
+      }
+    };
+
     manualUploadButton.addEventListener("click", handleUpload);
     localFolderSelect?.addEventListener("change", updateManualButtonState);
-    manualRemoteSelect?.addEventListener("change", updateManualButtonState);
-    localFolderRefresh?.addEventListener("click", loadLocalFolders);
+    manualRemoteSelect?.addEventListener("change", () => {
+      updateManualButtonState();
+      updateFileButtonState();
+    });
+    localFolderSearchButton?.addEventListener("click", () => {
+      const query = (localFolderQueryInput?.value || "").trim();
+      loadLocalFolders(query);
+    });
+    localFolderQueryInput?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        localFolderSearchButton?.click();
+      }
+    });
+    manualUploadFileInput?.addEventListener("change", () => {
+      updateFileButtonState();
+    });
+    if (manualFileUploadButton) {
+      manualFileUploadButton.addEventListener("click", handleFileUpload);
+    }
 
     loadLocalFolders();
     updateManualButtonState();
+    updateFileButtonState();
   };
 
   if (downloadForm) {
