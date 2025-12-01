@@ -303,6 +303,26 @@ def local_folders():
     return jsonify({"ok": True, "folders": sorted(folders), "base": str(base_dir), "query": query})
 
 
+@app.route("/api/local/download-files")
+def local_files():
+    settings = load_settings()
+    base_dir = _downloads_root(settings).resolve()
+    folder = (request.args.get("folder") or "").strip()
+
+    if not folder:
+        return jsonify({"ok": False, "message": "폴더를 선택하세요."}), 400
+
+    target_dir = (base_dir / folder).resolve()
+    if not str(target_dir).startswith(str(base_dir)):
+        return jsonify({"ok": False, "message": "허용된 다운로드 폴더 내에서만 조회할 수 있습니다."}), 400
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        return jsonify({"ok": False, "message": "선택한 폴더를 찾을 수 없습니다."}), 404
+
+    files = [item.name for item in target_dir.iterdir() if item.is_file()]
+    return jsonify({"ok": True, "files": sorted(files), "base": str(target_dir), "count": len(files)})
+
+
 @app.route("/upload/manual", methods=["POST"])
 def manual_upload():
     payload = request.get_json(silent=True) or {}
@@ -325,6 +345,48 @@ def manual_upload():
     ok, message = upload_to_gdrive(target_path, remote_path, settings.get("auth", {}))
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": message}), status
+
+
+@app.route("/upload/manual/files", methods=["POST"])
+def manual_files_upload():
+    payload = request.get_json(silent=True) or {}
+    local_dir = (payload.get("local_path") or "").strip()
+    remote_path = (payload.get("remote_path") or "").strip()
+    files = payload.get("files") or []
+
+    if not local_dir or not remote_path:
+        return jsonify({"ok": False, "message": "로컬 폴더와 Google Drive 경로를 모두 선택하세요."}), 400
+
+    if not files:
+        return jsonify({"ok": False, "message": "업로드할 파일을 선택하세요."}), 400
+
+    settings = load_settings()
+    base_dir = _downloads_root(settings).resolve()
+    target_dir = (base_dir / local_dir).resolve()
+
+    if not str(target_dir).startswith(str(base_dir)):
+        return jsonify({"ok": False, "message": "허용된 다운로드 폴더 내부에서만 업로드할 수 있습니다."}), 400
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        return jsonify({"ok": False, "message": "선택한 로컬 경로가 존재하지 않습니다."}), 404
+
+    uploaded: list[str] = []
+    for name in files:
+        safe_name = Path(name).name
+        if safe_name != name:
+            return jsonify({"ok": False, "message": "잘못된 파일 이름이 포함되어 있습니다."}), 400
+
+        file_path = target_dir / safe_name
+        if not file_path.exists() or not file_path.is_file():
+            return jsonify({"ok": False, "message": f"파일을 찾을 수 없습니다: {safe_name}"}), 404
+
+        ok, message = upload_to_gdrive(file_path, remote_path, settings.get("auth", {}))
+        if not ok:
+            return jsonify({"ok": False, "message": message}), 500
+        uploaded.append(safe_name)
+
+    joined = ", ".join(uploaded)
+    return jsonify({"ok": True, "message": f"{len(uploaded)}개 파일을 업로드했습니다: {joined}"})
 
 
 @app.route("/upload/manual/file", methods=["POST"])
