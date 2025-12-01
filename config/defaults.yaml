@@ -6,6 +6,9 @@
     "transcripts": "/root/rcbot/downloads/transcripts",
     "summaries": "/root/rcbot/downloads/summaries",
     "gdrive_upload": "GoogleDrive/yt-bot",
+    "download_upload": "GoogleDrive/yt-bot/link",
+    "recording_upload": "GoogleDrive/yt-bot/live",
+    "capture_upload": "GoogleDrive/yt-bot/captures",
     "transcript_upload": "GoogleDrive/yt-bot/transcripts",
     "summary_upload": "GoogleDrive/yt-bot/summaries"
   },

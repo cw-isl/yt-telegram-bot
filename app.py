@@ -271,6 +271,9 @@ def settings_action():
     current["paths"]["transcripts"] = request.form.get("transcripts", current["paths"].get("transcripts"))
     current["paths"]["summaries"] = request.form.get("summaries", current["paths"].get("summaries"))
     current["paths"]["gdrive_upload"] = request.form.get("gdrive_upload", current["paths"].get("gdrive_upload"))
+    current["paths"]["download_upload"] = request.form.get("download_upload", current["paths"].get("download_upload"))
+    current["paths"]["recording_upload"] = request.form.get("recording_upload", current["paths"].get("recording_upload"))
+    current["paths"]["capture_upload"] = request.form.get("capture_upload", current["paths"].get("capture_upload"))
     current["paths"]["transcript_upload"] = request.form.get("transcript_upload", current["paths"].get("transcript_upload"))
     current["paths"]["summary_upload"] = request.form.get("summary_upload", current["paths"].get("summary_upload"))
 
