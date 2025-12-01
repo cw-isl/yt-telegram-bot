@@ -178,6 +178,35 @@
           <h6 class="text-muted mb-2">자동 업로드 경로 (Google Drive)</h6>
         </div>
         <div class="col-md-4">
+          <label class="form-label">링크 다운로드 업로드 경로</label>
+          <div class="input-group mb-1">
+            <input class="form-control gdrive-path-input" name="download_upload" id="download_upload" value="{{ settings.paths.download_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="download-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select gdrive-path-select d-none" id="download-upload-select" data-bind-input="download_upload"></select>
+          <small class="text-muted">다운로드한 파일을 업로드할 기본 경로를 선택하세요.</small>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">라이브 녹화 업로드 경로</label>
+          <div class="input-group mb-1">
+            <input class="form-control gdrive-path-input" name="recording_upload" id="recording_upload" value="{{ settings.paths.recording_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="recording-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select gdrive-path-select d-none" id="recording-upload-select" data-bind-input="recording_upload"></select>
+          <small class="text-muted">라이브 녹화 파일을 올릴 경로를 지정하세요.</small>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">캡처 업로드 경로</label>
+          <div class="input-group mb-1">
+            <input class="form-control gdrive-path-input" name="capture_upload" id="capture_upload" value="{{ settings.paths.capture_upload }}" />
+            <button class="btn btn-outline-secondary gdrive-path-button" data-target="capture-upload-select" type="button">경로 불러오기</button>
+          </div>
+          <select class="form-select gdrive-path-select d-none" id="capture-upload-select" data-bind-input="capture_upload"></select>
+          <small class="text-muted">캡처 이미지 업로드 위치를 선택하세요.</small>
+        </div>
+
+        <div class="col-md-4">
           <label class="form-label">전사 업로드 경로</label>
           <div class="input-group mb-1">
             <input class="form-control gdrive-path-input" name="transcript_upload" id="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
@@ -186,6 +215,7 @@
           <select class="form-select gdrive-path-select d-none" id="transcript-upload-select" data-bind-input="transcript_upload"></select>
           <small class="text-muted">rclone으로 연결된 Google Drive 폴더를 선택하세요.</small>
         </div>
+
         <div class="col-md-4">
           <label class="form-label">요약 업로드 경로</label>
           <div class="input-group mb-1">
@@ -196,7 +226,7 @@
           <small class="text-muted">폴더를 선택해 요약본 업로드 위치를 고를 수 있습니다.</small>
         </div>
 
-        <div class="col-md-6">
+        <div class="col-md-4">
           <label class="form-label">일반 업로드 경로</label>
           <div class="input-group mb-1">
             <input class="form-control gdrive-path-input" name="gdrive_upload" id="gdrive_upload" value="{{ settings.paths.gdrive_upload }}" />
