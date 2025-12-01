@@ -23,6 +23,20 @@ body {
   height: 10px;
 }
 
+.action-button-group .btn {
+  border-radius: 12px !important;
+  min-width: 110px;
+}
+
+.manual-upload .form-select,
+.manual-upload .btn {
+  border-radius: 10px;
+}
+
+.manual-upload .input-group > :not(:last-child) {
+  margin-right: 6px;
+}
+
 .live-preview iframe {
   border: 0;
   width: 100%;

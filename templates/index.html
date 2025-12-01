@@ -13,13 +13,12 @@
           <input name="live_url" id="live_url" type="url" class="form-control" placeholder="https://www.youtube.com/live/..." />
           <span class="input-group-text bg-light" id="live-timer" role="status" aria-live="polite">대기 중</span>
         </div>
-        <div class="btn-group w-100" role="group">
-          <button class="btn btn-outline-primary" name="action" value="녹화 시작">녹화 시작</button>
-          <button class="btn btn-outline-secondary" name="action" value="일시정지">일시정지</button>
-          <button class="btn btn-outline-danger" name="action" value="종료">종료</button>
-          <button class="btn btn-outline-success" name="action" value="업로드">업로드</button>
-          <button type="button" class="btn btn-outline-info" id="live-search-button">검색</button>
-          <button type="button" class="btn btn-outline-dark" id="live-capture-button">캡처</button>
+        <div class="action-button-group d-flex flex-wrap gap-2" role="group">
+          <button class="btn btn-outline-primary flex-fill" name="action" value="녹화 시작">녹화 시작</button>
+          <button class="btn btn-outline-secondary flex-fill" name="action" value="일시정지">일시정지</button>
+          <button class="btn btn-outline-danger flex-fill" name="action" value="종료">종료</button>
+          <button type="button" class="btn btn-outline-info flex-fill" id="live-search-button">검색</button>
+          <button type="button" class="btn btn-outline-dark flex-fill" id="live-capture-button">캡처</button>
         </div>
         <div class="form-text text-danger" id="live-status" aria-live="polite"></div>
       </form>
@@ -56,10 +55,6 @@
           <input name="video_url" id="video_url" type="url" class="form-control" placeholder="https://www.youtube.com/..." required />
           <button class="btn btn-primary" type="submit">다운로드</button>
         </div>
-        <div class="form-check mb-2">
-          <input class="form-check-input" type="checkbox" value="on" id="upload_after" name="upload_after" />
-          <label class="form-check-label" for="upload_after">다운로드 후 원드라이브 업로드 예약</label>
-        </div>
         <div class="progress mb-2 d-none" id="download-progress">
           <div class="progress-bar" role="progressbar" style="width: 0%" id="download-progress-bar"></div>
         </div>
@@ -75,19 +70,23 @@
         <span class="badge bg-light text-dark">진행률 실시간 표시</span>
       </div>
 
-      <form method="post" action="{{ url_for('transcript_action') }}" class="mb-4">
+      <form method="post" action="{{ url_for('transcript_action') }}" class="mb-4" id="transcript-form">
         <div class="d-flex justify-content-between mb-2">
           <h6 class="mb-0">전사</h6>
-          <small class="text-muted">자동 업로드: {{ settings.paths.transcript_upload }}</small>
+          <small class="text-muted">완료 시 설정한 디렉토리에 저장됩니다.</small>
         </div>
         <div class="row g-2 align-items-center">
           <div class="col-md-8">
-            <select class="form-select" name="file_name">
-              {% for cat in categories %}
+            <select class="form-select" name="file_name" id="transcript-file">
+              {% for cat in transcript_sources %}
               <optgroup label="{{ cat.name }}">
-                {% for f in cat.files %}
-                <option>{{ f }}</option>
-                {% endfor %}
+                {% if cat.files %}
+                  {% for f in cat.files %}
+                  <option>{{ f }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option disabled>파일이 없습니다</option>
+                {% endif %}
               </optgroup>
               {% endfor %}
             </select>
@@ -96,24 +95,28 @@
             <button class="btn btn-primary">전사 시작</button>
           </div>
         </div>
-        <div class="progress mt-2">
-          <div class="progress-bar {{ jobs.transcript.active|percent_class }}" style="width: {{ jobs.transcript.active }}%"></div>
+        <div class="progress mt-2 d-none" id="transcript-progress">
+          <div class="progress-bar bg-info" role="progressbar" style="width: 0%" id="transcript-progress-bar"></div>
         </div>
       </form>
 
-      <form method="post" action="{{ url_for('summary_action') }}">
+      <form method="post" action="{{ url_for('summary_action') }}" id="summary-form">
         <div class="d-flex justify-content-between mb-2">
           <h6 class="mb-0">요약</h6>
-          <small class="text-muted">자동 업로드: {{ settings.paths.summary_upload }}</small>
+          <small class="text-muted">전사 파일을 바탕으로 요약본을 저장합니다.</small>
         </div>
         <div class="row g-2 align-items-center">
           <div class="col-md-8">
-            <select class="form-select" name="file_name">
-              {% for cat in categories %}
+            <select class="form-select" name="file_name" id="summary-file">
+              {% for cat in summary_sources %}
               <optgroup label="{{ cat.name }}">
-                {% for f in cat.files %}
-                <option>{{ f }}</option>
-                {% endfor %}
+                {% if cat.files %}
+                  {% for f in cat.files %}
+                  <option>{{ f }}</option>
+                  {% endfor %}
+                {% else %}
+                  <option disabled>파일이 없습니다</option>
+                {% endif %}
               </optgroup>
               {% endfor %}
             </select>
@@ -122,8 +125,8 @@
             <button class="btn btn-success">요약 시작</button>
           </div>
         </div>
-        <div class="progress mt-2">
-          <div class="progress-bar {{ jobs.summary.active|percent_class }}" style="width: {{ jobs.summary.active }}%"></div>
+        <div class="progress mt-2 d-none" id="summary-progress">
+          <div class="progress-bar bg-success" role="progressbar" style="width: 0%" id="summary-progress-bar"></div>
         </div>
       </form>
     </div>
@@ -175,7 +178,7 @@
           <input class="form-control" name="summaries" value="{{ settings.paths.summaries }}" />
         </div>
         <div class="col-12">
-          <h6 class="text-muted mb-2">자동 업로드 경로 (Google Drive)</h6>
+          <h6 class="text-muted mb-2">Google Drive 경로</h6>
         </div>
         <div class="col-md-4">
           <label class="form-label">링크 다운로드 업로드 경로</label>
@@ -247,12 +250,48 @@
 
         <div class="col-12 d-flex justify-content-between align-items-center">
           <div>
-            <span class="badge bg-light text-dark">자동 업로드</span>
-            <small class="text-muted ms-2">전사/요약 완료 후 Google Drive에 바로 반영됩니다.</small>
+            <span class="badge bg-light text-dark">저장 설정</span>
+            <small class="text-muted ms-2">로컬 저장 경로와 드라이브 연동 정보를 관리합니다.</small>
           </div>
           <button class="btn btn-primary">설정 저장</button>
         </div>
       </form>
+      <div class="manual-upload mt-4 pt-3 border-top" id="manual-upload">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="mb-0">수동 업로드</h6>
+          <span class="badge bg-secondary">Google Drive</span>
+        </div>
+        <div class="row g-3 align-items-end">
+          <div class="col-md-4">
+            <label class="form-label">로컬 폴더 (/root/rcbot/downloads)</label>
+            <div class="input-group">
+              <select class="form-select" id="local-folder-select">
+                <option value="">폴더를 선택하세요</option>
+              </select>
+              <button class="btn btn-outline-secondary" type="button" id="local-folder-refresh">새로고침</button>
+            </div>
+            <small class="text-muted">다운로드/녹화/전사 등 하위 폴더를 고릅니다.</small>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Google Drive 폴더</label>
+            <div class="input-group">
+              <select class="form-select gdrive-path-select d-none" id="manual-remote-select">
+                <option value="">폴더를 선택하세요</option>
+              </select>
+              <button class="btn btn-outline-secondary gdrive-path-button" data-target="manual-remote-select" type="button">경로 불러오기</button>
+            </div>
+            <small class="text-muted">rclone에서 불러온 폴더를 선택하세요.</small>
+          </div>
+          <div class="col-md-4 d-grid">
+            <button class="btn btn-dark" type="button" id="manual-upload-button" disabled>업로드 시작</button>
+            <small class="text-muted">두 경로를 모두 선택하면 업로드할 수 있습니다.</small>
+          </div>
+        </div>
+        <div class="progress mt-3 d-none" id="manual-upload-progress">
+          <div class="progress-bar bg-dark" role="progressbar" style="width: 0%" id="manual-upload-progress-bar"></div>
+        </div>
+        <div class="small text-muted mt-2" id="manual-upload-status">대기 중</div>
+      </div>
     </div>
   </div>
 </div>
@@ -402,8 +441,6 @@
         setLiveStatus("녹화를 종료했습니다.", "text-muted");
       } else if (action === "일시정지") {
         setLiveStatus("녹화를 일시정지했습니다.", "text-muted");
-      } else if (action === "업로드") {
-        setLiveStatus("업로드를 시작합니다.", "text-muted");
       }
     });
   }
@@ -476,6 +513,19 @@
   const downloadStatus = document.getElementById("download-status");
   const gdriveButtons = document.querySelectorAll(".gdrive-path-button");
   const gdriveSelects = document.querySelectorAll(".gdrive-path-select");
+  const manualUploadButton = document.getElementById("manual-upload-button");
+  const manualUploadProgress = document.getElementById("manual-upload-progress");
+  const manualUploadProgressBar = document.getElementById("manual-upload-progress-bar");
+  const manualUploadStatus = document.getElementById("manual-upload-status");
+  const manualRemoteSelect = document.getElementById("manual-remote-select");
+  const localFolderSelect = document.getElementById("local-folder-select");
+  const localFolderRefresh = document.getElementById("local-folder-refresh");
+  const transcriptFormEl = document.getElementById("transcript-form");
+  const summaryFormEl = document.getElementById("summary-form");
+  const transcriptProgress = document.getElementById("transcript-progress");
+  const summaryProgress = document.getElementById("summary-progress");
+  const transcriptProgressBar = document.getElementById("transcript-progress-bar");
+  const summaryProgressBar = document.getElementById("summary-progress-bar");
   let cachedGdrivePaths = null;
 
   const bindSelectsToInputs = () => {
@@ -504,6 +554,32 @@
         option.value = path;
         option.textContent = path;
         select.appendChild(option);
+      });
+    });
+  };
+
+  const showTaskProgress = (wrapper, bar) => {
+    if (!wrapper || !bar) return;
+    wrapper.classList.remove("d-none");
+    bar.style.width = "15%";
+    let current = 15;
+    const tick = () => {
+      current = Math.min(95, current + Math.random() * 18);
+      bar.style.width = `${current}%`;
+    };
+    return setInterval(tick, 500);
+  };
+
+  const setupTaskProgress = () => {
+    const pairs = [
+      { form: transcriptFormEl, wrapper: transcriptProgress, bar: transcriptProgressBar },
+      { form: summaryFormEl, wrapper: summaryProgress, bar: summaryProgressBar },
+    ];
+
+    pairs.forEach(({ form, wrapper, bar }) => {
+      if (!form) return;
+      form.addEventListener("submit", () => {
+        showTaskProgress(wrapper, bar);
       });
     });
   };
@@ -551,6 +627,97 @@
     });
   };
 
+  const loadLocalFolders = async () => {
+    if (!localFolderSelect) return [];
+    try {
+      const response = await fetch("{{ url_for('local_folders') }}");
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "로컬 폴더를 불러오지 못했습니다.");
+      }
+
+      localFolderSelect.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "폴더를 선택하세요";
+      localFolderSelect.appendChild(placeholder);
+
+      (payload.folders || []).forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        localFolderSelect.appendChild(option);
+      });
+
+      return payload.folders || [];
+    } catch (error) {
+      alert(error.message || "로컬 폴더 목록을 가져오는 중 오류가 발생했습니다.");
+      return [];
+    }
+  };
+
+  const updateManualButtonState = () => {
+    if (!manualUploadButton) return;
+    manualUploadButton.disabled = !(localFolderSelect?.value && manualRemoteSelect?.value);
+  };
+
+  const setupManualUpload = () => {
+    if (!manualUploadButton) return;
+
+    const startBar = () => {
+      if (!manualUploadProgress || !manualUploadProgressBar) return null;
+      manualUploadProgress.classList.remove("d-none");
+      manualUploadProgressBar.style.width = "10%";
+      return setInterval(() => {
+        const current = parseFloat(manualUploadProgressBar.style.width) || 10;
+        const next = Math.min(96, current + Math.random() * 15);
+        manualUploadProgressBar.style.width = `${next}%`;
+      }, 500);
+    };
+
+    const finishBar = (ok) => {
+      if (!manualUploadProgress || !manualUploadProgressBar) return;
+      manualUploadProgressBar.style.width = "100%";
+      manualUploadProgressBar.classList.toggle("bg-success", !!ok);
+      manualUploadProgressBar.classList.toggle("bg-danger", !ok);
+      setTimeout(() => manualUploadProgress.classList.add("d-none"), 1600);
+    };
+
+    const handleUpload = async () => {
+      if (!localFolderSelect?.value || !manualRemoteSelect?.value) return;
+      manualUploadButton.disabled = true;
+      manualUploadStatus.textContent = "업로드 준비 중...";
+      const timer = startBar();
+
+      try {
+        const response = await fetch("{{ url_for('manual_upload') }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ local_path: localFolderSelect.value, remote_path: manualRemoteSelect.value }),
+        });
+
+        const payload = await response.json();
+        const success = response.ok && payload.ok;
+        finishBar(success);
+        manualUploadStatus.textContent = payload.message || (success ? "업로드 완료" : "업로드에 실패했습니다.");
+      } catch (error) {
+        finishBar(false);
+        manualUploadStatus.textContent = "업로드 요청 중 오류가 발생했습니다.";
+      } finally {
+        manualUploadButton.disabled = false;
+        if (timer) clearInterval(timer);
+      }
+    };
+
+    manualUploadButton.addEventListener("click", handleUpload);
+    localFolderSelect?.addEventListener("change", updateManualButtonState);
+    manualRemoteSelect?.addEventListener("change", updateManualButtonState);
+    localFolderRefresh?.addEventListener("click", loadLocalFolders);
+
+    loadLocalFolders();
+    updateManualButtonState();
+  };
+
   if (downloadForm) {
     let timerId;
 
@@ -577,7 +744,6 @@
     downloadForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const videoUrl = document.getElementById("video_url").value;
-      const uploadAfter = document.getElementById("upload_after").checked;
 
       if (!videoUrl) {
         downloadStatus.textContent = "링크를 입력하세요.";
@@ -591,7 +757,7 @@
         const response = await fetch("{{ url_for('download_action') }}", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ video_url: videoUrl, upload_after: uploadAfter }),
+          body: JSON.stringify({ video_url: videoUrl }),
         });
 
         const payload = await response.json();
@@ -606,5 +772,7 @@
   }
 
   setupGdriveButtons();
+  setupManualUpload();
+  setupTaskProgress();
 </script>
 {% endblock %}
