@@ -8,6 +8,7 @@ from pathlib import Path
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.utils import secure_filename
 
 from youtube_recorder_bot import (
     capture_live_frame,
@@ -281,11 +282,25 @@ def gdrive_folders():
 def local_folders():
     settings = load_settings()
     base_dir = _downloads_root(settings)
+    query = (request.args.get("q") or "").strip().lower()
     if not base_dir.exists():
-        return jsonify({"ok": True, "folders": [], "base": str(base_dir)}), 200
+        return (
+            jsonify({"ok": True, "folders": [], "base": str(base_dir), "query": query}),
+            200,
+        )
 
-    folders = sorted(item.name for item in base_dir.iterdir() if item.is_dir())
-    return jsonify({"ok": True, "folders": folders, "base": str(base_dir)})
+    folders = []
+    for item in base_dir.iterdir():
+        if not item.is_dir():
+            continue
+
+        name = item.name
+        if query and query not in name.lower():
+            continue
+
+        folders.append(name)
+
+    return jsonify({"ok": True, "folders": sorted(folders), "base": str(base_dir), "query": query})
 
 
 @app.route("/upload/manual", methods=["POST"])
@@ -310,6 +325,47 @@ def manual_upload():
     ok, message = upload_to_gdrive(target_path, remote_path, settings.get("auth", {}))
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": message}), status
+
+
+@app.route("/upload/manual/file", methods=["POST"])
+def manual_file_upload():
+    if "file" not in request.files:
+        return jsonify({"ok": False, "message": "업로드할 파일을 선택하세요."}), 400
+
+    upload_file = request.files["file"]
+    remote_path = (request.form.get("remote_path") or "").strip()
+
+    if not upload_file.filename:
+        return jsonify({"ok": False, "message": "파일 이름이 비어 있습니다."}), 400
+
+    if not remote_path:
+        return jsonify({"ok": False, "message": "Google Drive 폴더를 선택하세요."}), 400
+
+    settings = load_settings()
+    base_dir = _downloads_root(settings).resolve()
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = secure_filename(upload_file.filename)
+    if not safe_name:
+        return jsonify({"ok": False, "message": "업로드 가능한 파일 이름이 아닙니다."}), 400
+
+    target_path = base_dir / safe_name
+    duplicate = 1
+    while target_path.exists():
+        target_path = base_dir / f"{Path(safe_name).stem}_{duplicate}{Path(safe_name).suffix}"
+        duplicate += 1
+
+    try:
+        upload_file.save(target_path)
+        ok, message = upload_to_gdrive(target_path, remote_path, settings.get("auth", {}))
+        status = 200 if ok else 500
+        return jsonify({"ok": ok, "message": message}), status
+    finally:
+        if target_path.exists():
+            try:
+                target_path.unlink()
+            except OSError:
+                pass
 
 
 @app.route("/settings", methods=["POST"])
