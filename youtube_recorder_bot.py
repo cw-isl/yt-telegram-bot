@@ -137,6 +137,27 @@ def list_gdrive_folders(auth: dict, *, max_depth: int = 3, limit: int = 200) -> 
     return sorted(set(folders)), None
 
 
+def upload_to_gdrive(local_path: Path, remote_path: str, auth: dict) -> tuple[bool, str]:
+    ok, error = acquire_gdrive_access(auth)
+    if not ok:
+        return False, error or "Google Drive 연결을 확인하세요."
+
+    remote = _gdrive_remote_name(auth)
+    target = remote_path.strip("/")
+    destination = f"{remote}:{target}" if target else f"{remote}:"
+
+    if local_path.is_dir():
+        source = str(local_path)
+    else:
+        source = str(local_path)
+
+    rc, stdout, stderr = run_cmd([RCLONE_BIN, "copy", source, destination, "--create-empty-src-dirs"])
+    if rc != 0:
+        return False, stderr or stdout or "Google Drive 업로드에 실패했습니다."
+
+    return True, f"{local_path.name}을(를) {destination}으로 업로드했습니다."
+
+
 def save_settings(data: dict) -> None:
     USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     USER_CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

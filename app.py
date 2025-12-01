@@ -4,18 +4,17 @@ import os
 import ssl
 import uuid
 from pathlib import Path
-from typing import List
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
 from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from youtube_recorder_bot import (
-    acquire_gdrive_access,
     capture_live_frame,
     list_gdrive_folders,
     load_settings,
     save_settings,
+    upload_to_gdrive,
     yt_download,
 )
 
@@ -54,9 +53,36 @@ def _bool_env(key: str, default: bool = False) -> bool:
 def _jobs_state():
     return {
         "recording": {"live": 32, "download": 0},
-        "transcript": {"active": 72},
-        "summary": {"active": 48},
+        "transcript": {"active": 0},
+        "summary": {"active": 0},
     }
+
+
+def _list_files(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    return sorted(item.name for item in path.iterdir() if item.is_file())
+
+
+def _downloads_root(settings: dict) -> Path:
+    downloads_dir = Path(settings.get("paths", {}).get("downloads", "/root/rcbot/downloads/link")).expanduser()
+    return downloads_dir.parent
+
+
+def _transcript_sources(settings: dict) -> list[dict]:
+    paths = settings.get("paths", {})
+    downloads_dir = Path(paths.get("downloads", "/root/rcbot/downloads/link")).expanduser()
+    live_dir = Path(paths.get("recordings", "/root/rcbot/downloads/live")).expanduser()
+
+    return [
+        {"name": "링크 다운로드", "files": _list_files(downloads_dir)},
+        {"name": "라이브 녹화", "files": _list_files(live_dir)},
+    ]
+
+
+def _summary_sources(settings: dict) -> list[dict]:
+    transcripts_dir = Path(settings.get("paths", {}).get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
+    return [{"name": "전사 파일", "files": _list_files(transcripts_dir)}]
 
 
 def _ssl_context():
@@ -130,12 +156,12 @@ def _looks_like_live_url(url: str) -> bool:
 @app.route("/")
 def index():
     settings = load_settings()
-    categories: List[dict] = settings.get("ui", {}).get("gdrive_categories", [])
     jobs = _jobs_state()
     return render_template(
         "index.html",
         settings=settings,
-        categories=categories,
+        transcript_sources=_transcript_sources(settings),
+        summary_sources=_summary_sources(settings),
         jobs=jobs,
         https_state=_https_status(),
     )
@@ -198,7 +224,6 @@ def serve_capture(filename: str):
 def download_action():
     payload = request.get_json(silent=True) or {}
     link = (payload.get("video_url") or request.form.get("video_url") or "").strip()
-    upload_after = payload.get("upload_after") in {True, "true", "on", "1", 1}
 
     if not link:
         return jsonify({"ok": False, "message": "다운로드할 유튜브 링크를 입력하세요."}), 400
@@ -217,13 +242,6 @@ def download_action():
         )
 
     message = f"다운로드 완료: {result.name}"
-    if upload_after:
-        ok, token_error = acquire_gdrive_access(load_settings().get("auth", {}))
-        if ok:
-            message += " (Google Drive 업로드 예약)"
-        else:
-            message += f" (업로드 보류: {token_error or 'Google Drive 연결 필요'})"
-
     flash(message, "success")
     return jsonify({"ok": True, "message": message, "file_name": result.name})
 
@@ -257,6 +275,41 @@ def gdrive_folders():
         return jsonify({"ok": False, "message": error}), 400
 
     return jsonify({"ok": True, "folders": folders, "count": len(folders)})
+
+
+@app.route("/api/local/download-folders")
+def local_folders():
+    settings = load_settings()
+    base_dir = _downloads_root(settings)
+    if not base_dir.exists():
+        return jsonify({"ok": True, "folders": [], "base": str(base_dir)}), 200
+
+    folders = sorted(item.name for item in base_dir.iterdir() if item.is_dir())
+    return jsonify({"ok": True, "folders": folders, "base": str(base_dir)})
+
+
+@app.route("/upload/manual", methods=["POST"])
+def manual_upload():
+    payload = request.get_json(silent=True) or {}
+    local_dir = (payload.get("local_path") or "").strip()
+    remote_path = (payload.get("remote_path") or "").strip()
+
+    if not local_dir or not remote_path:
+        return jsonify({"ok": False, "message": "로컬 폴더와 구글 드라이브 경로를 모두 선택하세요."}), 400
+
+    settings = load_settings()
+    base_dir = _downloads_root(settings).resolve()
+    target_path = (base_dir / local_dir).resolve()
+
+    if not str(target_path).startswith(str(base_dir)):
+        return jsonify({"ok": False, "message": "허용된 다운로드 폴더 내부에서만 업로드할 수 있습니다."}), 400
+
+    if not target_path.exists():
+        return jsonify({"ok": False, "message": "선택한 로컬 경로가 존재하지 않습니다."}), 404
+
+    ok, message = upload_to_gdrive(target_path, remote_path, settings.get("auth", {}))
+    status = 200 if ok else 500
+    return jsonify({"ok": ok, "message": message}), status
 
 
 @app.route("/settings", methods=["POST"])
