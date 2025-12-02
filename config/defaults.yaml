@@ -4,34 +4,10 @@
     "downloads": "/root/rcbot/downloads/link",
     "captures": "/root/rcbot/downloads/recordings",
     "transcripts": "/root/rcbot/downloads/transcripts",
-    "summaries": "/root/rcbot/downloads/summaries",
-    "gdrive_upload": "GoogleDrive/yt-bot",
-    "download_upload": "GoogleDrive/yt-bot/link",
-    "recording_upload": "GoogleDrive/yt-bot/live",
-    "capture_upload": "GoogleDrive/yt-bot/captures",
-    "transcript_upload": "GoogleDrive/yt-bot/transcripts",
-    "summary_upload": "GoogleDrive/yt-bot/summaries"
+    "summaries": "/root/rcbot/downloads/summaries"
   },
   "auth": {
     "chatgpt_token": "",
     "gdrive_remote": "gdrive"
-  },
-  "ui": {
-    "gdrive_categories": [
-      {
-        "name": "회의",
-        "files": [
-          "회의록_2024-05-프로젝트A.mp4",
-          "회의록_2024-05-프로젝트B.mp4"
-        ]
-      },
-      {
-        "name": "교육",
-        "files": [
-          "세미나_테스트자동화.mp4",
-          "워크샵_프롬프트엔지니어링.mp4"
-        ]
-      }
-    ]
   }
 }

@@ -179,67 +179,6 @@
           <label class="form-label">요약 저장 위치</label>
           <input class="form-control" name="summaries" value="{{ settings.paths.summaries }}" />
         </div>
-        <div class="col-12">
-          <h6 class="text-muted mb-2">Google Drive 경로</h6>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">링크 다운로드 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="download_upload" id="download_upload" value="{{ settings.paths.download_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="download-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="download-upload-select" data-bind-input="download_upload"></select>
-          <small class="text-muted">다운로드한 파일을 업로드할 기본 경로를 선택하세요.</small>
-        </div>
-        <div class="col-md-4">
-          <label class="form-label">라이브 녹화 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="recording_upload" id="recording_upload" value="{{ settings.paths.recording_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="recording-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="recording-upload-select" data-bind-input="recording_upload"></select>
-          <small class="text-muted">라이브 녹화 파일을 올릴 경로를 지정하세요.</small>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">캡처 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="capture_upload" id="capture_upload" value="{{ settings.paths.capture_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="capture-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="capture-upload-select" data-bind-input="capture_upload"></select>
-          <small class="text-muted">캡처 이미지 업로드 위치를 선택하세요.</small>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">전사 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="transcript_upload" id="transcript_upload" value="{{ settings.paths.transcript_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="transcript-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="transcript-upload-select" data-bind-input="transcript_upload"></select>
-          <small class="text-muted">rclone으로 연결된 Google Drive 폴더를 선택하세요.</small>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">요약 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="summary_upload" id="summary_upload" value="{{ settings.paths.summary_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="summary-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="summary-upload-select" data-bind-input="summary_upload"></select>
-          <small class="text-muted">폴더를 선택해 요약본 업로드 위치를 고를 수 있습니다.</small>
-        </div>
-
-        <div class="col-md-4">
-          <label class="form-label">일반 업로드 경로</label>
-          <div class="input-group mb-1">
-            <input class="form-control gdrive-path-input" name="gdrive_upload" id="gdrive_upload" value="{{ settings.paths.gdrive_upload }}" />
-            <button class="btn btn-outline-secondary gdrive-path-button" data-target="general-upload-select" type="button">경로 불러오기</button>
-          </div>
-          <select class="form-select gdrive-path-select d-none" id="general-upload-select" data-bind-input="gdrive_upload"></select>
-          <small class="text-muted">불러온 경로 중 원하는 폴더를 골라 업로드 경로로 설정하세요.</small>
-        </div>
         <div class="col-md-3">
           <label class="form-label">ChatGPT 토큰</label>
           <input class="form-control" name="chatgpt_token" value="{{ settings.auth.chatgpt_token }}" />
@@ -283,12 +222,12 @@
               <option value="">폴더를 선택하세요</option>
             </select>
             <button class="btn btn-outline-secondary w-100 mt-2 rounded-3 gdrive-path-button" data-target="manual-remote-select" type="button">경로 불러오기</button>
-            <small class="text-muted d-block mt-1">rclone에서 불러온 폴더를 선택하세요.</small>
+            <small class="text-muted d-block mt-1">rclone에서 불러온 폴더를 선택하세요. 선택하지 않으면 <code>{{ manual_default_remote }}</code> 폴더로 업로드됩니다.</small>
           </div>
           <div class="col-lg-3 col-md-6 d-grid gap-2">
             <label class="form-label">선택 파일 업로드</label>
             <button class="btn btn-dark" type="button" id="manual-upload-button" disabled>업로드</button>
-            <small class="text-muted">Drive 경로를 선택한 뒤 업로드하세요.</small>
+            <small class="text-muted">경로를 고르지 않으면 기본 폴더(<code>{{ manual_default_remote }}</code>)로 업로드합니다.</small>
           </div>
         </div>
         <div class="progress mt-3 d-none" id="manual-upload-progress">
@@ -755,6 +694,7 @@
   const manualUploadProgressBar = document.getElementById("manual-upload-progress-bar");
   const manualUploadStatus = document.getElementById("manual-upload-status");
   const manualRemoteSelect = document.getElementById("manual-remote-select");
+  const manualDefaultRemote = "{{ manual_default_remote }}";
   const localFolderSelect = document.getElementById("local-folder-select");
   const localFolderSearchButton = document.getElementById("local-folder-search");
   const localFileList = document.getElementById("local-file-list");
@@ -1123,7 +1063,7 @@
   const updateManualButtonState = () => {
     if (!manualUploadButton) return;
     const hasFiles = getSelectedFiles().length > 0;
-    manualUploadButton.disabled = !(hasFiles && manualRemoteSelect?.value);
+    manualUploadButton.disabled = !(hasFiles && localFolderSelect?.value);
   };
 
   const setupManualUpload = () => {
@@ -1151,10 +1091,11 @@
 
     const handleUpload = async () => {
       const files = getSelectedFiles();
-      if (!localFolderSelect?.value || !manualRemoteSelect?.value || !files.length) {
-        manualUploadStatus.textContent = "업로드할 파일과 경로를 모두 선택하세요.";
+      if (!localFolderSelect?.value || !files.length) {
+        manualUploadStatus.textContent = "업로드할 파일과 로컬 폴더를 모두 선택하세요.";
         return;
       }
+      const remotePath = manualRemoteSelect?.value?.trim() || manualDefaultRemote;
       manualUploadButton.disabled = true;
       manualUploadStatus.textContent = "업로드 준비 중...";
       const timer = startBar();
@@ -1166,14 +1107,15 @@
           body: JSON.stringify({
             local_path: localFolderSelect.value,
             files,
-            remote_path: manualRemoteSelect.value,
+            remote_path: remotePath,
           }),
         });
 
         const payload = await response.json();
         const success = response.ok && payload.ok;
         finishBar(success);
-        manualUploadStatus.textContent = payload.message || (success ? "업로드 완료" : "업로드에 실패했습니다.");
+        manualUploadStatus.textContent =
+          payload.message || (success ? `업로드 완료 (${remotePath})` : "업로드에 실패했습니다.");
       } catch (error) {
         finishBar(false);
         manualUploadStatus.textContent = "업로드 요청 중 오류가 발생했습니다.";

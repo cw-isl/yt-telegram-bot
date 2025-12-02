@@ -29,6 +29,7 @@ from youtube_recorder_bot import (
 
 
 BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_MANUAL_REMOTE_PATH = "parchment"
 
 
 def _load_env_file(env_path: Path = BASE_DIR / ".env") -> None:
@@ -346,6 +347,7 @@ def index():
     return render_template(
         "index.html",
         settings=settings,
+        manual_default_remote=DEFAULT_MANUAL_REMOTE_PATH,
         transcript_sources=_transcript_sources(settings),
         summary_sources=_summary_sources(settings),
         jobs=jobs,
@@ -617,10 +619,10 @@ def local_files():
 def manual_upload():
     payload = request.get_json(silent=True) or {}
     local_dir = (payload.get("local_path") or "").strip()
-    remote_path = (payload.get("remote_path") or "").strip()
+    remote_path = (payload.get("remote_path") or "").strip() or DEFAULT_MANUAL_REMOTE_PATH
 
-    if not local_dir or not remote_path:
-        return jsonify({"ok": False, "message": "로컬 폴더와 구글 드라이브 경로를 모두 선택하세요."}), 400
+    if not local_dir:
+        return jsonify({"ok": False, "message": "로컬 폴더를 선택하세요."}), 400
 
     settings = load_settings()
     base_dir = _downloads_root(settings).resolve()
@@ -641,11 +643,11 @@ def manual_upload():
 def manual_files_upload():
     payload = request.get_json(silent=True) or {}
     local_dir = (payload.get("local_path") or "").strip()
-    remote_path = (payload.get("remote_path") or "").strip()
+    remote_path = (payload.get("remote_path") or "").strip() or DEFAULT_MANUAL_REMOTE_PATH
     files = payload.get("files") or []
 
-    if not local_dir or not remote_path:
-        return jsonify({"ok": False, "message": "로컬 폴더와 Google Drive 경로를 모두 선택하세요."}), 400
+    if not local_dir:
+        return jsonify({"ok": False, "message": "로컬 폴더를 선택하세요."}), 400
 
     if not files:
         return jsonify({"ok": False, "message": "업로드할 파일을 선택하세요."}), 400
@@ -685,13 +687,10 @@ def manual_file_upload():
         return jsonify({"ok": False, "message": "업로드할 파일을 선택하세요."}), 400
 
     upload_file = request.files["file"]
-    remote_path = (request.form.get("remote_path") or "").strip()
+    remote_path = (request.form.get("remote_path") or "").strip() or DEFAULT_MANUAL_REMOTE_PATH
 
     if not upload_file.filename:
         return jsonify({"ok": False, "message": "파일 이름이 비어 있습니다."}), 400
-
-    if not remote_path:
-        return jsonify({"ok": False, "message": "Google Drive 폴더를 선택하세요."}), 400
 
     settings = load_settings()
     base_dir = _downloads_root(settings).resolve()
@@ -731,12 +730,6 @@ def settings_action():
     current["paths"]["downloads"] = request.form.get("downloads", current["paths"].get("downloads"))
     current["paths"]["transcripts"] = request.form.get("transcripts", current["paths"].get("transcripts"))
     current["paths"]["summaries"] = request.form.get("summaries", current["paths"].get("summaries"))
-    current["paths"]["gdrive_upload"] = request.form.get("gdrive_upload", current["paths"].get("gdrive_upload"))
-    current["paths"]["download_upload"] = request.form.get("download_upload", current["paths"].get("download_upload"))
-    current["paths"]["recording_upload"] = request.form.get("recording_upload", current["paths"].get("recording_upload"))
-    current["paths"]["capture_upload"] = request.form.get("capture_upload", current["paths"].get("capture_upload"))
-    current["paths"]["transcript_upload"] = request.form.get("transcript_upload", current["paths"].get("transcript_upload"))
-    current["paths"]["summary_upload"] = request.form.get("summary_upload", current["paths"].get("summary_upload"))
 
     current["auth"]["chatgpt_token"] = request.form.get("chatgpt_token", "")
     current["auth"]["gdrive_remote"] = request.form.get("gdrive_remote", current["auth"].get("gdrive_remote", ""))
