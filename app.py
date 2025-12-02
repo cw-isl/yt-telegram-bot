@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import ssl
+import subprocess
+import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, url_for
@@ -12,8 +15,10 @@ from werkzeug.utils import secure_filename
 
 from youtube_recorder_bot import (
     capture_live_frame,
+    ffmpeg_path,
     list_gdrive_folders,
     load_settings,
+    resolve_live_stream_url,
     save_settings,
     upload_to_gdrive,
     yt_download,
@@ -42,6 +47,85 @@ _load_env_file()
 app = Flask(__name__)
 app.secret_key = "dev-secret"  # replace in production
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+
+class LiveRecorder:
+    def __init__(self) -> None:
+        self.process: subprocess.Popen[str] | None = None
+        self.output_path: Path | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def start(self, stream_url: str, output_path: Path) -> tuple[bool, str]:
+        if self.active:
+            return False, "이미 다른 녹화가 진행 중입니다."
+
+        ffmpeg_bin = ffmpeg_path()
+        if not ffmpeg_bin:
+            return False, "ffmpeg가 설치되어 있지 않아 녹화를 시작할 수 없습니다."
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            str(ffmpeg_bin),
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            stream_url,
+            "-c",
+            "copy",
+            "-movflags",
+            "faststart",
+            "-bsf:a",
+            "aac_adtstoasc",
+            str(output_path),
+        ]
+
+        try:
+            self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.output_path = output_path
+        except FileNotFoundError:
+            self.process = None
+            self.output_path = None
+            return False, "ffmpeg 실행 파일을 찾을 수 없습니다. 경로 설정을 확인하세요."
+
+        # ffmpeg가 즉시 종료된 경우 오류 메시지를 Surface한다.
+        if self.process.poll() is not None:
+            stderr = (self.process.stderr.read() if self.process.stderr else "").strip()
+            self.process = None
+            self.output_path = None
+            return False, stderr or "라이브 스트림에 연결하지 못했습니다."
+
+        return True, f"{output_path.name} 녹화를 시작했습니다."
+
+    def stop(self, timeout: float = 10.0) -> tuple[bool, str]:
+        if not self.active:
+            return False, "진행 중인 녹화가 없습니다."
+
+        assert self.process is not None
+
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+
+        output_path = self.output_path
+        self.process = None
+        self.output_path = None
+
+        if output_path and output_path.exists() and output_path.stat().st_size > 0:
+            return True, f"녹화가 완료되었습니다: {output_path.name}"
+
+        return False, "녹화 파일이 생성되지 않았습니다. 스트림 상태를 확인하세요."
+
+
+_live_recorder = LiveRecorder()
+_live_recorder_lock = threading.Lock()
 
 
 def _bool_env(key: str, default: bool = False) -> bool:
@@ -84,6 +168,12 @@ def _transcript_sources(settings: dict) -> list[dict]:
 def _summary_sources(settings: dict) -> list[dict]:
     transcripts_dir = Path(settings.get("paths", {}).get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
     return [{"name": "전사 파일", "files": _list_files(transcripts_dir)}]
+
+
+def _live_output_path(settings: dict) -> Path:
+    live_dir = Path(settings.get("paths", {}).get("recordings", "/root/rcbot/downloads/live")).expanduser()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return live_dir / f"{timestamp}.mp4"
 
 
 def _ssl_context():
@@ -174,6 +264,7 @@ def record_live_action():
     payload = request.get_json(silent=True) or {}
     action = (payload.get("action") or request.form.get("action") or "").strip()
     live_url = (payload.get("live_url") or request.form.get("live_url") or "").strip()
+    settings = load_settings()
 
     def respond(message: str, category: str = "info", status: int = 200):
         if is_json:
@@ -187,10 +278,24 @@ def record_live_action():
             return respond("라이브 주소를 입력하세요.", "warning", 400)
         if not _looks_like_live_url(live_url):
             return respond("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.", "warning", 400)
-        return respond("라이브 녹화를 시작했습니다.", "success")
+
+        stream_url, error = resolve_live_stream_url(live_url)
+        if error or not stream_url:
+            return respond(error or "스트리밍 URL을 확인하지 못했습니다.", "danger", 400)
+
+        output_path = _live_output_path(settings)
+        with _live_recorder_lock:
+            ok, message = _live_recorder.start(stream_url, output_path)
+
+        return respond(message, "success" if ok else "danger", 200 if ok else 500)
 
     if action == "종료":
-        return respond("녹화를 종료했습니다.", "info")
+        with _live_recorder_lock:
+            ok, message = _live_recorder.stop()
+
+        category = "info" if ok else "warning"
+        status = 200 if ok else 400
+        return respond(message, category, status)
 
     if action:
         return respond(f"{action} 작업을 시작했습니다.", "info")
