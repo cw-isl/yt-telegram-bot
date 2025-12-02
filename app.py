@@ -170,22 +170,32 @@ def index():
 
 @app.route("/record/live", methods=["POST"])
 def record_live_action():
-    action = request.form.get("action")
-    live_url = request.form.get("live_url", "").strip()
+    is_json = request.is_json
+    payload = request.get_json(silent=True) or {}
+    action = (payload.get("action") or request.form.get("action") or "").strip()
+    live_url = (payload.get("live_url") or request.form.get("live_url") or "").strip()
+
+    def respond(message: str, category: str = "info", status: int = 200):
+        if is_json:
+            return jsonify({"ok": status < 400, "message": message, "action": action}), status
+
+        flash(message, category)
+        return redirect(url_for("index") + "#live")
 
     if action == "녹화 시작":
         if not live_url:
-            flash("라이브 주소를 입력하세요.", "warning")
-            return redirect(url_for("index") + "#live")
+            return respond("라이브 주소를 입력하세요.", "warning", 400)
         if not _looks_like_live_url(live_url):
-            flash("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.", "warning")
-            return redirect(url_for("index") + "#live")
-        flash("라이브 녹화를 시작했습니다.", "success")
-    elif action == "종료":
-        flash("녹화를 종료했습니다.", "info")
-    elif action:
-        flash(f"{action} 작업을 시작했습니다.", "info")
-    return redirect(url_for("index") + "#live")
+            return respond("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.", "warning", 400)
+        return respond("라이브 녹화를 시작했습니다.", "success")
+
+    if action == "종료":
+        return respond("녹화를 종료했습니다.", "info")
+
+    if action:
+        return respond(f"{action} 작업을 시작했습니다.", "info")
+
+    return respond("알 수 없는 요청입니다.", "warning", 400)
 
 
 @app.route("/capture/live", methods=["POST"])
