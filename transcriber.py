@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,6 +8,9 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 from faster_whisper import WhisperModel
+
+
+logger = logging.getLogger(__name__)
 
 
 def _bool_env(key: str, default: bool = False) -> bool:
@@ -81,6 +85,7 @@ def transcribe_file(
             str(source_path), beam_size=options.beam_size, vad_filter=options.vad_filter
         )
     except Exception as exc:  # noqa: BLE001 - surfaced to the caller for user feedback
+        logger.exception("Whisper transcribe failed for %s", source_path)
         return None, f"전사 작업 중 오류가 발생했습니다: {exc}"
 
     lines = []

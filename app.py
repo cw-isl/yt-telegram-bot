@@ -494,21 +494,27 @@ def transcript_action():
         flash(message, "success" if ok else "warning")
         return redirect(url_for("index"))
 
-    if not file_name:
-        return respond("파일을 선택하세요.", False, 400)
+    try:
+        if not file_name:
+            return respond("파일을 선택하세요.", False, 400)
 
-    source = _resolve_existing_file(file_name, downloads_dir, live_dir)
-    if not source:
-        return respond("선택한 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
+        source = _resolve_existing_file(file_name, downloads_dir, live_dir)
+        if not source:
+            return respond("선택한 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
 
-    output_path = _unique_output_path(transcripts_dir, Path(file_name).stem, ".txt")
-    options = WhisperOptions()
-    transcript_path, error = transcribe_file(source, output_path, options=options)
-    if error or not transcript_path:
-        return respond(error or "전사 작업에 실패했습니다.", False, 500)
+        output_path = _unique_output_path(transcripts_dir, Path(file_name).stem, ".txt")
+        options = WhisperOptions()
+        transcript_path, error = transcribe_file(source, output_path, options=options)
+        if error or not transcript_path:
+            return respond(error or "전사 작업에 실패했습니다.", False, 500)
 
-    file_name = transcript_path.name
-    return respond(f"전사 파일을 저장했습니다: {file_name}", True, 200)
+        file_name = transcript_path.name
+        return respond(f"전사 파일을 저장했습니다: {file_name}", True, 200)
+    except Exception as exc:  # noqa: BLE001 - surfaced to caller for debugging
+        app.logger.exception("Transcript request failed for %s", file_name or "<missing>")
+        return respond(
+            f"전사 처리 중 서버 오류가 발생했습니다. 로그를 확인하세요: {exc}", False, 500
+        )
 
 
 @app.route("/summary", methods=["POST"])
