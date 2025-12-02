@@ -314,10 +314,13 @@
   const livePauseButton = liveForm?.querySelector('button[value="일시정지"]');
   const liveAutoStopLabel = document.getElementById("live-auto-stop");
   const LIVE_TIMER_KEY = "yt-helper-live-started-at";
+  const LIVE_TIMER_ELAPSED_KEY = "yt-helper-live-elapsed-ms";
   const LIVE_DEFAULT_DURATION_MS = 10 * 60 * 1000;
   const LIVE_EXTEND_STEP_MS = 10 * 60 * 1000;
   const LIVE_PAUSE_AUTO_STOP_MS = 10 * 60 * 1000;
   let liveTimerId;
+  let liveTimerOrigin;
+  let liveElapsedBeforeMs = 0;
   let liveCountdownTimerId;
   let liveCountdownLastTick;
   let liveRemainingMs = LIVE_DEFAULT_DURATION_MS;
@@ -394,32 +397,74 @@
     if (liveTimerId) {
       clearInterval(liveTimerId);
     }
-    if (liveTimer) {
-      liveTimer.textContent = "대기 중";
-      liveTimer.classList.remove("text-primary", "fw-semibold");
-    }
     liveTimerId = undefined;
   };
 
-  const startLiveTimer = (startedAt) => {
+  const resetLiveTimer = (options = { resetLabel: true }) => {
+    stopLiveTimer();
+    liveTimerOrigin = undefined;
+    liveElapsedBeforeMs = 0;
+    localStorage.removeItem(LIVE_TIMER_KEY);
+    localStorage.removeItem(LIVE_TIMER_ELAPSED_KEY);
+    if (options.resetLabel && liveTimer) {
+      liveTimer.textContent = "대기 중";
+      liveTimer.classList.remove("text-primary", "fw-semibold");
+    }
+  };
+
+  const getLiveElapsedMs = () => {
+    const runningElapsed = liveTimerOrigin ? Math.max(0, Date.now() - liveTimerOrigin) : 0;
+    return Math.max(0, liveElapsedBeforeMs + runningElapsed);
+  };
+
+  const renderLiveTimer = (elapsed) => {
+    if (!liveTimer) return;
+    liveTimer.textContent = `녹화 ${formatElapsed(elapsed)}`;
+    liveTimer.classList.add("text-primary", "fw-semibold");
+  };
+
+  const startLiveTimer = (startedAt, elapsedBefore = 0) => {
     if (!liveTimer) return;
     const origin = Number(startedAt);
-    if (Number.isNaN(origin)) return;
+    const elapsedOffset = Number(elapsedBefore);
+    if (Number.isNaN(origin) || Number.isNaN(elapsedOffset)) return;
+    liveTimerOrigin = origin;
+    liveElapsedBeforeMs = Math.max(0, elapsedOffset);
     stopLiveTimer();
     const render = () => {
-      const elapsed = Date.now() - origin;
-      liveTimer.textContent = `녹화 ${formatElapsed(elapsed)}`;
+      renderLiveTimer(getLiveElapsedMs());
     };
     render();
-    liveTimer.classList.add("text-primary", "fw-semibold");
     liveTimerId = setInterval(render, 1000);
+    localStorage.setItem(LIVE_TIMER_KEY, origin.toString());
+    localStorage.setItem(LIVE_TIMER_ELAPSED_KEY, liveElapsedBeforeMs.toString());
   };
 
   const resumeLiveTimer = () => {
-    const saved = localStorage.getItem(LIVE_TIMER_KEY);
-    if (saved) {
-      startLiveTimer(Number(saved));
+    const savedElapsed = Number(localStorage.getItem(LIVE_TIMER_ELAPSED_KEY) || "0");
+    liveElapsedBeforeMs = Number.isNaN(savedElapsed) ? 0 : Math.max(0, savedElapsed);
+    const savedOrigin = localStorage.getItem(LIVE_TIMER_KEY);
+    if (savedOrigin) {
+      startLiveTimer(Number(savedOrigin), liveElapsedBeforeMs);
+      return "recording";
     }
+
+    if (liveElapsedBeforeMs > 0) {
+      renderLiveTimer(liveElapsedBeforeMs);
+      return "paused";
+    }
+
+    return "idle";
+  };
+
+  const pauseLiveTimer = () => {
+    const totalElapsed = getLiveElapsedMs();
+    liveElapsedBeforeMs = totalElapsed;
+    liveTimerOrigin = undefined;
+    stopLiveTimer();
+    renderLiveTimer(totalElapsed);
+    localStorage.removeItem(LIVE_TIMER_KEY);
+    localStorage.setItem(LIVE_TIMER_ELAPSED_KEY, totalElapsed.toString());
   };
 
   const renderAutoStopCountdown = () => {
@@ -515,8 +560,7 @@
   const handleLiveActionSuccess = (action) => {
     if (action === "녹화 시작") {
       const now = Date.now();
-      localStorage.setItem(LIVE_TIMER_KEY, now.toString());
-      startLiveTimer(now);
+      startLiveTimer(now, 0);
       resetCountdown();
       setLiveState("recording");
       startCountdown();
@@ -525,8 +569,7 @@
     }
 
     if (action === "종료") {
-      localStorage.removeItem(LIVE_TIMER_KEY);
-      stopLiveTimer();
+      resetLiveTimer();
       resetCountdown();
       clearPauseTimeout();
       setLiveState("idle");
@@ -535,6 +578,7 @@
 
     if (action === "일시정지") {
       setLiveState("paused");
+      pauseLiveTimer();
       clearPauseTimeout();
       schedulePauseTimeout();
       return;
@@ -544,6 +588,7 @@
       setLiveState("recording");
       startCountdown();
       clearPauseTimeout();
+      startLiveTimer(Date.now(), liveElapsedBeforeMs);
     }
   };
 
@@ -595,10 +640,13 @@
   };
 
   if (liveForm && liveUrlInput) {
-    resumeLiveTimer();
+    const initialLiveState = resumeLiveTimer();
     renderAutoStopCountdown();
     updateExtendButtonState();
-    setLiveState("idle");
+    setLiveState(initialLiveState);
+    if (initialLiveState === "paused") {
+      schedulePauseTimeout();
+    }
 
     liveForm.addEventListener("submit", async (event) => {
       event.preventDefault();
