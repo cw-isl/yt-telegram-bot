@@ -16,9 +16,14 @@
         <div class="action-button-group d-flex flex-wrap gap-2" role="group">
           <button class="btn btn-outline-primary flex-fill" name="action" value="녹화 시작">녹화 시작</button>
           <button class="btn btn-outline-secondary flex-fill" name="action" value="일시정지">일시정지</button>
-          <button class="btn btn-outline-danger flex-fill" name="action" value="종료">종료</button>
+          <button class="btn btn-outline-danger flex-fill" name="action" value="종료" id="live-stop-button">종료</button>
           <button type="button" class="btn btn-outline-info flex-fill" id="live-search-button">검색</button>
+          <button type="button" class="btn btn-outline-warning flex-fill" id="live-extend-button" disabled>녹화 시간 연장</button>
           <button type="button" class="btn btn-outline-dark flex-fill" id="live-capture-button">캡처</button>
+        </div>
+        <div class="d-flex justify-content-between align-items-center mt-2 small text-muted">
+          <span id="live-auto-stop" class="fw-semibold">녹화 자동 종료 : 10:00</span>
+          <span class="text-muted">일시정지 시 10분 동안 반응이 없으면 자동 종료</span>
         </div>
         <div class="form-text text-danger" id="live-status" aria-live="polite"></div>
       </form>
@@ -304,8 +309,21 @@
   const livePreviewPlaceholder = document.getElementById("live-preview-placeholder");
   const liveSearchButton = document.getElementById("live-search-button");
   const liveCaptureButton = document.getElementById("live-capture-button");
+  const liveExtendButton = document.getElementById("live-extend-button");
+  const liveStopButton = document.getElementById("live-stop-button");
+  const livePauseButton = liveForm?.querySelector('button[value="일시정지"]');
+  const liveAutoStopLabel = document.getElementById("live-auto-stop");
   const LIVE_TIMER_KEY = "yt-helper-live-started-at";
+  const LIVE_DEFAULT_DURATION_MS = 10 * 60 * 1000;
+  const LIVE_EXTEND_STEP_MS = 10 * 60 * 1000;
+  const LIVE_PAUSE_AUTO_STOP_MS = 10 * 60 * 1000;
   let liveTimerId;
+  let liveCountdownTimerId;
+  let liveCountdownLastTick;
+  let liveRemainingMs = LIVE_DEFAULT_DURATION_MS;
+  let liveState = "idle";
+  let liveAutoStopInFlight = false;
+  let livePauseTimeoutId;
 
   const setLiveStatus = (message, variant = "text-danger") => {
     if (!liveStatus) return;
@@ -365,6 +383,13 @@
     return `${hours}:${minutes}:${seconds}`;
   };
 
+  const formatCountdown = (ms) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+    const seconds = String(totalSeconds % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
+  };
+
   const stopLiveTimer = () => {
     if (liveTimerId) {
       clearInterval(liveTimerId);
@@ -397,57 +422,188 @@
     }
   };
 
+  const renderAutoStopCountdown = () => {
+    if (!liveAutoStopLabel) return;
+    liveAutoStopLabel.textContent = `녹화 자동 종료 : ${formatCountdown(liveRemainingMs)}`;
+  };
+
+  const updateExtendButtonState = () => {
+    if (!liveExtendButton) return;
+    const canExtend = liveState !== "idle" && liveRemainingMs < 3 * 60 * 1000;
+    liveExtendButton.disabled = !canExtend;
+  };
+
+  const setStopButtonMode = (mode) => {
+    if (!liveStopButton) return;
+    if (mode === "restart") {
+      liveStopButton.textContent = "재시작";
+      liveStopButton.value = "재시작";
+      liveStopButton.classList.remove("btn-outline-danger");
+      liveStopButton.classList.add("btn-outline-success");
+    } else {
+      liveStopButton.textContent = "종료";
+      liveStopButton.value = "종료";
+      liveStopButton.classList.add("btn-outline-danger");
+      liveStopButton.classList.remove("btn-outline-success");
+    }
+  };
+
+  const setLiveState = (nextState) => {
+    liveState = nextState;
+    if (liveState === "paused") {
+      setStopButtonMode("restart");
+    } else {
+      setStopButtonMode("stop");
+    }
+    updateExtendButtonState();
+  };
+
+  const clearPauseTimeout = () => {
+    if (livePauseTimeoutId) clearTimeout(livePauseTimeoutId);
+    livePauseTimeoutId = undefined;
+  };
+
+  const schedulePauseTimeout = () => {
+    clearPauseTimeout();
+    livePauseTimeoutId = setTimeout(() => {
+      handleAutoStop("일시정지 상태로 10분이 지나 자동 종료합니다.");
+    }, LIVE_PAUSE_AUTO_STOP_MS);
+  };
+
+  const resetCountdown = () => {
+    if (liveCountdownTimerId) clearInterval(liveCountdownTimerId);
+    liveCountdownTimerId = undefined;
+    liveCountdownLastTick = undefined;
+    liveRemainingMs = LIVE_DEFAULT_DURATION_MS;
+    renderAutoStopCountdown();
+    updateExtendButtonState();
+  };
+
+  const startCountdown = () => {
+    liveCountdownLastTick = Date.now();
+    if (liveCountdownTimerId) return;
+    liveCountdownTimerId = setInterval(() => {
+      if (liveState !== "recording") {
+        liveCountdownLastTick = Date.now();
+        return;
+      }
+
+      const now = Date.now();
+      const delta = now - (liveCountdownLastTick || now);
+      liveCountdownLastTick = now;
+
+      liveRemainingMs = Math.max(0, liveRemainingMs - delta);
+      renderAutoStopCountdown();
+      updateExtendButtonState();
+
+      if (liveRemainingMs <= 0) {
+        clearInterval(liveCountdownTimerId);
+        liveCountdownTimerId = undefined;
+        handleAutoStop("녹화 시간이 만료되어 자동 종료합니다.");
+      }
+    }, 500);
+  };
+
+  const handleAutoStop = async (message) => {
+    if (liveAutoStopInFlight) return;
+    liveAutoStopInFlight = true;
+    setLiveStatus(message, "text-warning");
+    await performLiveAction("종료", { silent: true });
+    liveAutoStopInFlight = false;
+  };
+
+  const handleLiveActionSuccess = (action) => {
+    if (action === "녹화 시작") {
+      const now = Date.now();
+      localStorage.setItem(LIVE_TIMER_KEY, now.toString());
+      startLiveTimer(now);
+      resetCountdown();
+      setLiveState("recording");
+      startCountdown();
+      clearPauseTimeout();
+      return;
+    }
+
+    if (action === "종료") {
+      localStorage.removeItem(LIVE_TIMER_KEY);
+      stopLiveTimer();
+      resetCountdown();
+      clearPauseTimeout();
+      setLiveState("idle");
+      return;
+    }
+
+    if (action === "일시정지") {
+      setLiveState("paused");
+      clearPauseTimeout();
+      schedulePauseTimeout();
+      return;
+    }
+
+    if (action === "재시작") {
+      setLiveState("recording");
+      startCountdown();
+      clearPauseTimeout();
+    }
+  };
+
+  const performLiveAction = async (action, { liveUrl, silent = false } = {}) => {
+    if (!action) {
+      if (!silent) setLiveStatus("지원하지 않는 요청입니다.");
+      return { ok: false };
+    }
+
+    const trimmedUrl = liveUrl?.trim?.() || liveUrlInput?.value?.trim() || "";
+
+    if (action === "녹화 시작") {
+      if (!trimmedUrl) {
+        if (!silent) setLiveStatus("라이브 주소를 입력하세요.");
+        return { ok: false };
+      }
+      if (!isLiveUrl(trimmedUrl)) {
+        if (!silent) setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
+        return { ok: false };
+      }
+    }
+
+    if (!silent) {
+      setLiveStatus("요청을 처리하는 중입니다...", "text-muted");
+    }
+
+    try {
+      const response = await fetch("{{ url_for('record_live_action') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ action, live_url: trimmedUrl }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      const ok = response.ok && payload.ok;
+
+      if (ok) {
+        handleLiveActionSuccess(action);
+        if (!silent) setLiveStatus(payload.message || "요청을 완료했습니다.", "text-success");
+      } else if (!silent) {
+        setLiveStatus(payload.message || "요청 처리 중 오류가 발생했습니다.", "text-danger");
+      }
+
+      return { ok, payload };
+    } catch (error) {
+      if (!silent) setLiveStatus("요청을 전송하지 못했습니다. 네트워크 상태를 확인하세요.", "text-danger");
+      return { ok: false, error };
+    }
+  };
+
   if (liveForm && liveUrlInput) {
     resumeLiveTimer();
+    renderAutoStopCountdown();
+    updateExtendButtonState();
+    setLiveState("idle");
 
     liveForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const action = event.submitter?.value;
-      const liveUrl = liveUrlInput.value.trim();
-
-      if (!action) {
-        setLiveStatus("지원하지 않는 요청입니다.");
-        return;
-      }
-
-      if (action === "녹화 시작") {
-        if (!liveUrl) {
-          setLiveStatus("라이브 주소를 입력하세요.");
-          return;
-        }
-        if (!isLiveUrl(liveUrl)) {
-          setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
-          return;
-        }
-      }
-
-      setLiveStatus("요청을 처리하는 중입니다...", "text-muted");
-
-      try {
-        const response = await fetch("{{ url_for('record_live_action') }}", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ action, live_url: liveUrl }),
-        });
-
-        const payload = await response.json().catch(() => ({}));
-
-        if (response.ok && payload.ok) {
-          if (action === "녹화 시작") {
-            const now = Date.now();
-            localStorage.setItem(LIVE_TIMER_KEY, now.toString());
-            startLiveTimer(now);
-          } else if (action === "종료") {
-            localStorage.removeItem(LIVE_TIMER_KEY);
-            stopLiveTimer();
-          }
-          setLiveStatus(payload.message || "요청을 완료했습니다.", "text-success");
-        } else {
-          setLiveStatus(payload.message || "요청 처리 중 오류가 발생했습니다.", "text-danger");
-        }
-      } catch (error) {
-        setLiveStatus("요청을 전송하지 못했습니다. 네트워크 상태를 확인하세요.", "text-danger");
-      }
+      await performLiveAction(action, { liveUrl: liveUrlInput.value });
     });
   }
 
@@ -511,6 +667,22 @@
 
   if (liveCaptureButton) {
     liveCaptureButton.addEventListener("click", captureLivePreview);
+  }
+
+  if (liveExtendButton) {
+    liveExtendButton.addEventListener("click", () => {
+      if (liveState === "idle") {
+        setLiveStatus("녹화 중일 때만 시간을 연장할 수 있습니다.", "text-danger");
+        return;
+      }
+
+      liveRemainingMs = Math.max(0, liveRemainingMs) + LIVE_EXTEND_STEP_MS;
+      liveCountdownLastTick = Date.now();
+      startCountdown();
+      renderAutoStopCountdown();
+      updateExtendButtonState();
+      setLiveStatus("녹화 시간을 10분 연장했습니다.", "text-success");
+    });
   }
 
   const downloadForm = document.getElementById("download-form");

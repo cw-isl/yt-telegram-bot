@@ -6,6 +6,7 @@ import ssl
 import subprocess
 import threading
 import uuid
+import signal
 from datetime import datetime
 from pathlib import Path
 
@@ -55,6 +56,8 @@ class LiveRecorder:
     def __init__(self) -> None:
         self.process: subprocess.Popen[str] | None = None
         self.output_path: Path | None = None
+        self.paused: bool = False
+        self._pause_timer: threading.Timer | None = None
 
     @property
     def active(self) -> bool:
@@ -89,6 +92,8 @@ class LiveRecorder:
         try:
             self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self.output_path = output_path
+            self.paused = False
+            self._cancel_pause_timer()
         except FileNotFoundError:
             self.process = None
             self.output_path = None
@@ -103,7 +108,24 @@ class LiveRecorder:
 
         return True, f"{output_path.name} 녹화를 시작했습니다."
 
-    def stop(self, timeout: float = 10.0) -> tuple[bool, str]:
+    def _cancel_pause_timer(self) -> None:
+        if self._pause_timer:
+            self._pause_timer.cancel()
+        self._pause_timer = None
+
+    def _schedule_pause_timeout(self) -> None:
+        self._cancel_pause_timer()
+        self._pause_timer = threading.Timer(600, self._auto_stop_after_pause)
+        self._pause_timer.daemon = True
+        self._pause_timer.start()
+
+    def _auto_stop_after_pause(self) -> None:
+        if not self.paused:
+            return
+        with _live_recorder_lock:
+            self.stop(reason="일시정지 상태가 10분 이상 지속되어 녹화를 종료합니다.")
+
+    def stop(self, timeout: float = 10.0, reason: str | None = None) -> tuple[bool, str]:
         if not self.active:
             return False, "진행 중인 녹화가 없습니다."
 
@@ -119,11 +141,49 @@ class LiveRecorder:
         output_path = self.output_path
         self.process = None
         self.output_path = None
+        self.paused = False
+        self._cancel_pause_timer()
 
         if output_path and output_path.exists() and output_path.stat().st_size > 0:
+            if reason:
+                return True, f"{reason} (파일: {output_path.name})"
             return True, f"녹화가 완료되었습니다: {output_path.name}"
 
-        return False, "녹화 파일이 생성되지 않았습니다. 스트림 상태를 확인하세요."
+        return False, reason or "녹화 파일이 생성되지 않았습니다. 스트림 상태를 확인하세요."
+
+    def pause(self) -> tuple[bool, str]:
+        if not self.active:
+            return False, "진행 중인 녹화가 없습니다."
+
+        if self.paused:
+            return False, "이미 일시정지 상태입니다."
+
+        assert self.process is not None
+        try:
+            os.kill(self.process.pid, signal.SIGSTOP)
+        except Exception:
+            return False, "녹화를 일시정지하지 못했습니다."
+
+        self.paused = True
+        self._schedule_pause_timeout()
+        return True, "녹화를 일시정지했습니다. 10분 이내 재개하거나 종료하세요."
+
+    def resume(self) -> tuple[bool, str]:
+        if not self.active:
+            return False, "진행 중인 녹화가 없습니다."
+
+        if not self.paused:
+            return False, "녹화가 일시정지 상태가 아닙니다."
+
+        assert self.process is not None
+        try:
+            os.kill(self.process.pid, signal.SIGCONT)
+        except Exception:
+            return False, "녹화를 재개하지 못했습니다."
+
+        self.paused = False
+        self._cancel_pause_timer()
+        return True, "녹화를 재개했습니다."
 
 
 _live_recorder = LiveRecorder()
@@ -330,6 +390,22 @@ def record_live_action():
             ok, message = _live_recorder.stop()
 
         category = "info" if ok else "warning"
+        status = 200 if ok else 400
+        return respond(message, category, status)
+
+    if action == "일시정지":
+        with _live_recorder_lock:
+            ok, message = _live_recorder.pause()
+
+        category = "info" if ok else "warning"
+        status = 200 if ok else 400
+        return respond(message, category, status)
+
+    if action == "재시작":
+        with _live_recorder_lock:
+            ok, message = _live_recorder.resume()
+
+        category = "success" if ok else "warning"
         status = 200 if ok else 400
         return respond(message, category, status)
 
