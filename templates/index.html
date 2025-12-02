@@ -378,6 +378,13 @@
     livePreviewPlaceholder.classList.add("d-none");
   };
 
+  const resetLivePreview = () => {
+    if (!livePreviewFrame || !livePreviewPlaceholder) return;
+    livePreviewFrame.src = "";
+    livePreviewFrame.classList.add("d-none");
+    livePreviewPlaceholder.classList.remove("d-none");
+  };
+
   const formatElapsed = (ms) => {
     const totalSeconds = Math.max(0, Math.floor(ms / 1000));
     const hours = String(Math.floor(totalSeconds / 3600)).padStart(2, "0");
@@ -572,6 +579,10 @@
       resetLiveTimer();
       resetCountdown();
       clearPauseTimeout();
+      if (liveUrlInput) {
+        liveUrlInput.value = "";
+      }
+      resetLivePreview();
       setLiveState("idle");
       return;
     }
