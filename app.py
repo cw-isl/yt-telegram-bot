@@ -15,6 +15,7 @@ from flask import send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
+from transcriber import WhisperOptions, transcribe_file
 from youtube_recorder_bot import (
     capture_live_frame,
     ffmpeg_path,
@@ -501,15 +502,13 @@ def transcript_action():
         return respond("선택한 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
 
     output_path = _unique_output_path(transcripts_dir, Path(file_name).stem, ".txt")
-    transcript_body = (
-        f"원본 파일: {source.name}\n"
-        f"저장 위치: {source.parent}\n"
-        f"전사 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "이 파일은 요청된 전사 작업의 결과물을 나타내는 자리표시자입니다."
-    )
-    output_path.write_text(transcript_body, encoding="utf-8")
+    options = WhisperOptions()
+    transcript_path, error = transcribe_file(source, output_path, options=options)
+    if error or not transcript_path:
+        return respond(error or "전사 작업에 실패했습니다.", False, 500)
 
-    return respond(f"전사 파일을 저장했습니다: {output_path.name}", True, 200)
+    file_name = transcript_path.name
+    return respond(f"전사 파일을 저장했습니다: {file_name}", True, 200)
 
 
 @app.route("/summary", methods=["POST"])
