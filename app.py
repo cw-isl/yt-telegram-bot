@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import ssl
 import subprocess
 import threading
@@ -16,6 +17,7 @@ from werkzeug.utils import secure_filename
 from youtube_recorder_bot import (
     capture_live_frame,
     ffmpeg_path,
+    fetch_video_title,
     list_gdrive_folders,
     load_settings,
     resolve_live_stream_url,
@@ -170,10 +172,43 @@ def _summary_sources(settings: dict) -> list[dict]:
     return [{"name": "전사 파일", "files": _list_files(transcripts_dir)}]
 
 
-def _live_output_path(settings: dict) -> Path:
+def _sanitize_title(value: str) -> str:
+    cleaned = re.sub(r"[\\/:*?\"<>|]", "", value).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned or "live"
+
+
+def _live_output_path(settings: dict, title: str | None = None) -> Path:
     live_dir = Path(settings.get("paths", {}).get("recordings", "/root/rcbot/downloads/live")).expanduser()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return live_dir / f"{timestamp}.mp4"
+    live_dir.mkdir(parents=True, exist_ok=True)
+
+    base_title = _sanitize_title(title or datetime.now().strftime("%Y%m%d"))
+    time_suffix = datetime.now().strftime("%H:%M:%S")
+    candidate = live_dir / f"{base_title}_{time_suffix}.mp4"
+    counter = 1
+    while candidate.exists():
+        candidate = live_dir / f"{base_title}_{time_suffix}_{counter}.mp4"
+        counter += 1
+    return candidate
+
+
+def _resolve_existing_file(file_name: str, *directories: Path) -> Path | None:
+    for directory in directories:
+        candidate = (directory / file_name).expanduser().resolve()
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _unique_output_path(directory: Path, base_name: str, suffix: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    safe_stem = _sanitize_title(base_name or "output").replace(" ", "_")
+    candidate = directory / f"{safe_stem}{suffix}"
+    counter = 1
+    while candidate.exists():
+        candidate = directory / f"{safe_stem}_{counter}{suffix}"
+        counter += 1
+    return candidate
 
 
 def _ssl_context():
@@ -283,7 +318,8 @@ def record_live_action():
         if error or not stream_url:
             return respond(error or "스트리밍 URL을 확인하지 못했습니다.", "danger", 400)
 
-        output_path = _live_output_path(settings)
+        live_title, _ = fetch_video_title(live_url)
+        output_path = _live_output_path(settings, live_title)
         with _live_recorder_lock:
             ok, message = _live_recorder.start(stream_url, output_path)
 
@@ -364,22 +400,73 @@ def download_action():
 
 @app.route("/transcript", methods=["POST"])
 def transcript_action():
-    file_name = request.form.get("file_name")
-    if file_name:
-        flash(f"전사 작업을 예약했습니다: {file_name}", "success")
-    else:
-        flash("파일을 선택하세요.", "warning")
-    return redirect(url_for("index"))
+    payload = request.get_json(silent=True) or {}
+    file_name = (payload.get("file_name") or request.form.get("file_name") or "").strip()
+    settings = load_settings()
+    paths = settings.get("paths", {})
+
+    downloads_dir = Path(paths.get("downloads", "/root/rcbot/downloads/link")).expanduser()
+    live_dir = Path(paths.get("recordings", "/root/rcbot/downloads/live")).expanduser()
+    transcripts_dir = Path(paths.get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
+
+    def respond(message: str, ok: bool, status: int):
+        if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
+            return jsonify({"ok": ok, "message": message, "file_name": file_name}), status
+        flash(message, "success" if ok else "warning")
+        return redirect(url_for("index"))
+
+    if not file_name:
+        return respond("파일을 선택하세요.", False, 400)
+
+    source = _resolve_existing_file(file_name, downloads_dir, live_dir)
+    if not source:
+        return respond("선택한 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
+
+    output_path = _unique_output_path(transcripts_dir, Path(file_name).stem, ".txt")
+    transcript_body = (
+        f"원본 파일: {source.name}\n"
+        f"저장 위치: {source.parent}\n"
+        f"전사 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        "이 파일은 요청된 전사 작업의 결과물을 나타내는 자리표시자입니다."
+    )
+    output_path.write_text(transcript_body, encoding="utf-8")
+
+    return respond(f"전사 파일을 저장했습니다: {output_path.name}", True, 200)
 
 
 @app.route("/summary", methods=["POST"])
 def summary_action():
-    file_name = request.form.get("file_name")
-    if file_name:
-        flash(f"요약 작업을 예약했습니다: {file_name}", "success")
-    else:
-        flash("파일을 선택하세요.", "warning")
-    return redirect(url_for("index"))
+    payload = request.get_json(silent=True) or {}
+    file_name = (payload.get("file_name") or request.form.get("file_name") or "").strip()
+    settings = load_settings()
+    paths = settings.get("paths", {})
+
+    transcripts_dir = Path(paths.get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
+    summaries_dir = Path(paths.get("summaries", "/root/rcbot/downloads/summaries")).expanduser()
+
+    def respond(message: str, ok: bool, status: int):
+        if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
+            return jsonify({"ok": ok, "message": message, "file_name": file_name}), status
+        flash(message, "success" if ok else "warning")
+        return redirect(url_for("index"))
+
+    if not file_name:
+        return respond("파일을 선택하세요.", False, 400)
+
+    source = _resolve_existing_file(file_name, transcripts_dir)
+    if not source:
+        return respond("전사 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
+
+    output_path = _unique_output_path(summaries_dir, Path(file_name).stem + "_summary", ".txt")
+    summary_body = (
+        f"전사 파일: {source.name}\n"
+        f"저장 위치: {source.parent}\n"
+        f"요약 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        "이 파일은 전사 내용을 기반으로 생성된 요약 결과 자리표시자입니다."
+    )
+    output_path.write_text(summary_body, encoding="utf-8")
+
+    return respond(f"요약 파일을 저장했습니다: {output_path.name}", True, 200)
 
 
 @app.route("/api/sources/transcript")

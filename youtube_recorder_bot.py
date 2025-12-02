@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Tuple
@@ -215,6 +216,17 @@ def resolve_live_stream_url(url: str) -> tuple[str | None, str | None]:
 
   stream_url = stdout.splitlines()[0].strip()
   return stream_url, None
+
+
+def fetch_video_title(url: str) -> tuple[str | None, str | None]:
+  """Return the title of a YouTube video or live stream."""
+
+  rc, stdout, stderr = run_cmd(["yt-dlp", "--get-title", "--no-warnings", "--extractor-args", YOUTUBE_EXTRACTOR_ARGS, url])
+  if rc != 0 or not stdout.strip():
+      return None, stderr or "영상 제목을 가져오지 못했습니다."
+
+  title = stdout.splitlines()[0].strip()
+  return textwrap.shorten(title, width=120, placeholder="…"), None
 
 
 def capture_live_frame(url: str, dest_dir: Path | None = None) -> tuple[Path | None, str | None]:
