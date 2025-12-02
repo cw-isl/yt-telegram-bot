@@ -398,31 +398,53 @@
   if (liveForm && liveUrlInput) {
     resumeLiveTimer();
 
-    liveForm.addEventListener("submit", (event) => {
+    liveForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
       const action = event.submitter?.value;
       const liveUrl = liveUrlInput.value.trim();
 
+      if (!action) {
+        setLiveStatus("지원하지 않는 요청입니다.");
+        return;
+      }
+
       if (action === "녹화 시작") {
         if (!liveUrl) {
-          event.preventDefault();
           setLiveStatus("라이브 주소를 입력하세요.");
           return;
         }
         if (!isLiveUrl(liveUrl)) {
-          event.preventDefault();
           setLiveStatus("라이브 링크를 넣어주세요. 실시간 스트림 주소를 확인하세요.");
           return;
         }
-        const now = Date.now();
-        localStorage.setItem(LIVE_TIMER_KEY, now.toString());
-        startLiveTimer(now);
-        setLiveStatus("라이브 녹화를 시작했습니다.", "text-success");
-      } else if (action === "종료") {
-        localStorage.removeItem(LIVE_TIMER_KEY);
-        stopLiveTimer();
-        setLiveStatus("녹화를 종료했습니다.", "text-muted");
-      } else if (action === "일시정지") {
-        setLiveStatus("녹화를 일시정지했습니다.", "text-muted");
+      }
+
+      setLiveStatus("요청을 처리하는 중입니다...", "text-muted");
+
+      try {
+        const response = await fetch("{{ url_for('record_live_action') }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ action, live_url: liveUrl }),
+        });
+
+        const payload = await response.json().catch(() => ({}));
+
+        if (response.ok && payload.ok) {
+          if (action === "녹화 시작") {
+            const now = Date.now();
+            localStorage.setItem(LIVE_TIMER_KEY, now.toString());
+            startLiveTimer(now);
+          } else if (action === "종료") {
+            localStorage.removeItem(LIVE_TIMER_KEY);
+            stopLiveTimer();
+          }
+          setLiveStatus(payload.message || "요청을 완료했습니다.", "text-success");
+        } else {
+          setLiveStatus(payload.message || "요청 처리 중 오류가 발생했습니다.", "text-danger");
+        }
+      } catch (error) {
+        setLiveStatus("요청을 전송하지 못했습니다. 네트워크 상태를 확인하세요.", "text-danger");
       }
     });
   }
