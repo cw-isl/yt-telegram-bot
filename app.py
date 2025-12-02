@@ -267,6 +267,18 @@ def summary_action():
     return redirect(url_for("index"))
 
 
+@app.route("/api/sources/transcript")
+def transcript_sources_api():
+    settings = load_settings()
+    return jsonify({"ok": True, "sources": _transcript_sources(settings)})
+
+
+@app.route("/api/sources/summary")
+def summary_sources_api():
+    settings = load_settings()
+    return jsonify({"ok": True, "sources": _summary_sources(settings)})
+
+
 @app.route("/api/gdrive/folders")
 def gdrive_folders():
     settings = load_settings()

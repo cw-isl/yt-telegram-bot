@@ -76,7 +76,10 @@
           <small class="text-muted">완료 시 설정한 디렉토리에 저장됩니다.</small>
         </div>
         <div class="row g-2 align-items-center">
-          <div class="col-md-8">
+          <div class="col-auto">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="transcript-refresh">업데이트</button>
+          </div>
+          <div class="col-md-7">
             <select class="form-select" name="file_name" id="transcript-file">
               {% for cat in transcript_sources %}
               <optgroup label="{{ cat.name }}">
@@ -106,7 +109,10 @@
           <small class="text-muted">전사 파일을 바탕으로 요약본을 저장합니다.</small>
         </div>
         <div class="row g-2 align-items-center">
-          <div class="col-md-8">
+          <div class="col-auto">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="summary-refresh">업데이트</button>
+          </div>
+          <div class="col-md-7">
             <select class="form-select" name="file_name" id="summary-file">
               {% for cat in summary_sources %}
               <optgroup label="{{ cat.name }}">
@@ -139,17 +145,6 @@
       <div class="d-flex justify-content-between align-items-center mb-3">
         <h4>4. 설정</h4>
         <span class="badge bg-info text-dark">경로 &amp; 인증서</span>
-      </div>
-      <div class="alert alert-warning d-flex align-items-center" role="alert">
-        <div>
-          <div class="fw-semibold">HTTPS 상태</div>
-          {% if https_state.active %}
-          <div class="small mb-1">인증서 주체: {{ https_state.cert_subject or '확인되지 않음' }}</div>
-          <div class="small mb-0">신뢰할 수 있는 CA에서 발급된 인증서를 사용하고, IP 대신 인증서에 포함된 도메인으로 접속하면 경고 없이 바로 열립니다.</div>
-          {% else %}
-          <div class="small mb-0">{{ https_state.message }}. SSL_CERT_FILE/SSL_KEY_FILE 환경변수에 CA가 서명한 인증서를 지정하세요.</div>
-          {% endif %}
-        </div>
       </div>
       <form method="post" action="{{ url_for('settings_action') }}" class="row g-3">
         <div class="col-12">
@@ -298,21 +293,6 @@
   </div>
 </div>
 
-<div class="row g-3 mt-2">
-  <div class="col-12">
-    <div class="section-card">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <h6 class="mb-0">추천 기능</h6>
-        <span class="badge bg-secondary">추가 아이디어</span>
-      </div>
-      <ul class="mb-0">
-        <li>Google Drive 업로드 히스토리 로그 제공</li>
-        <li>짧은 요약/긴 요약/하이라이트 3단 요약 옵션</li>
-        <li>작업 실패 시 자동 재시도 및 이메일 알림</li>
-      </ul>
-    </div>
-  </div>
-</div>
 <script>
   const liveForm = document.getElementById("live-form");
   const liveUrlInput = document.getElementById("live_url");
@@ -530,6 +510,10 @@
   const summaryProgress = document.getElementById("summary-progress");
   const transcriptProgressBar = document.getElementById("transcript-progress-bar");
   const summaryProgressBar = document.getElementById("summary-progress-bar");
+  const transcriptSelect = document.getElementById("transcript-file");
+  const summarySelect = document.getElementById("summary-file");
+  const transcriptRefreshButton = document.getElementById("transcript-refresh");
+  const summaryRefreshButton = document.getElementById("summary-refresh");
   let cachedGdrivePaths = null;
 
   const bindSelectsToInputs = () => {
@@ -586,6 +570,85 @@
         showTaskProgress(wrapper, bar);
       });
     });
+  };
+
+  const renderSourceOptions = (selectEl, sources) => {
+    if (!selectEl) return;
+    selectEl.innerHTML = "";
+
+    (sources || []).forEach(({ name, files }) => {
+      const group = document.createElement("optgroup");
+      group.label = name;
+
+      if (files?.length) {
+        files.forEach((file) => {
+          const option = document.createElement("option");
+          option.value = file;
+          option.textContent = file;
+          group.appendChild(option);
+        });
+      } else {
+        const option = document.createElement("option");
+        option.disabled = true;
+        option.textContent = "파일이 없습니다";
+        group.appendChild(option);
+      }
+
+      selectEl.appendChild(group);
+    });
+
+    if (!selectEl.childElementCount) {
+      const placeholder = document.createElement("option");
+      placeholder.disabled = true;
+      placeholder.textContent = "목록이 없습니다";
+      selectEl.appendChild(placeholder);
+    }
+  };
+
+  const refreshSourceOptions = async (buttonEl, selectEl, endpoint) => {
+    if (!selectEl || !endpoint) return;
+    const previousValue = selectEl.value;
+    const originalContent = buttonEl?.innerHTML;
+
+    if (buttonEl) {
+      buttonEl.disabled = true;
+      buttonEl.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>';
+    }
+
+    try {
+      const response = await fetch(endpoint);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.message || "목록을 불러오지 못했습니다.");
+      }
+
+      renderSourceOptions(selectEl, payload.sources || []);
+      const matching = Array.from(selectEl.options).find((option) => option.value === previousValue && !option.disabled);
+      if (matching) {
+        selectEl.value = previousValue;
+      }
+    } catch (error) {
+      alert(error.message || "목록을 새로고침하는 중 문제가 발생했습니다.");
+    } finally {
+      if (buttonEl) {
+        buttonEl.disabled = false;
+        buttonEl.innerHTML = originalContent || "업데이트";
+      }
+    }
+  };
+
+  const setupSourceRefreshers = () => {
+    if (transcriptRefreshButton && transcriptSelect) {
+      transcriptRefreshButton.addEventListener("click", () =>
+        refreshSourceOptions(transcriptRefreshButton, transcriptSelect, "{{ url_for('transcript_sources_api') }}")
+      );
+    }
+
+    if (summaryRefreshButton && summarySelect) {
+      summaryRefreshButton.addEventListener("click", () =>
+        refreshSourceOptions(summaryRefreshButton, summarySelect, "{{ url_for('summary_sources_api') }}")
+      );
+    }
   };
 
   const loadGdrivePaths = async (triggerButton) => {
@@ -878,6 +941,7 @@
     });
   }
 
+  setupSourceRefreshers();
   setupGdriveButtons();
   setupManualUpload();
   setupTaskProgress();
