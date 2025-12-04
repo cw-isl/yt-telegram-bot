@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_SUMMARY_MODEL = os.getenv("SUMMARY_MODEL", "gpt-4o-mini")
 DEFAULT_SUMMARY_MAX_CHARS = int(os.getenv("SUMMARY_MAX_CHARS", "12000"))
 DEFAULT_OPENAI_BASE_URL = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+DEFAULT_SYSTEM_PROMPT = (
+    "당신은 방송 전사를 간결하게 요약하는 한국어 어시스턴트입니다. "
+    "핵심 사건과 시간 흐름을 유지하고, 중요한 발언자는 구분하세요."
+)
+DEFAULT_USER_PROMPT = (
+    "다음 전사를 5~7개의 핵심 bullet로 정리하고, 방송 주요 맥락을 한 문장으로 요약해 주세요. "
+    "불필요한 인사말이나 반복은 제외하세요."
+)
 
 
 def _parse_models(value: str | None) -> list[str]:
@@ -63,24 +71,45 @@ def _prepare_transcript_text(path: Path, *, max_chars: int | None = None) -> tup
     return text, False
 
 
+def _load_prompt_from_env(var_name: str, default: str) -> str:
+    value = os.getenv(var_name)
+    if not value:
+        return default
+
+    path = Path(value)
+    if path.exists() and path.is_file():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            logger.warning("%s에 지정된 프롬프트 파일을 읽지 못했습니다. 기본값을 사용합니다.", var_name)
+            return default
+
+    return value
+
+
+def _render_user_prompt(template: str, transcript_text: str) -> str:
+    if "{transcript}" in template:
+        return template.replace("{transcript}", transcript_text)
+
+    return f"{template.rstrip()}\n\n전사 내용:\n{transcript_text}"
+
+
 def _build_openai_request(model: str, transcript_text: str) -> dict[str, Any]:
+    system_prompt = _load_prompt_from_env("SUMMARY_SYSTEM_PROMPT", DEFAULT_SYSTEM_PROMPT)
+    user_template = _load_prompt_from_env("SUMMARY_USER_PROMPT", DEFAULT_USER_PROMPT)
+    user_prompt = _render_user_prompt(user_template, transcript_text)
+
     return {
         "model": model,
         "temperature": 0.2,
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "당신은 방송 전사를 간결하게 요약하는 한국어 어시스턴트입니다. "
-                    "핵심 사건과 시간 흐름을 유지하고, 중요한 발언자는 구분하세요."
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
-                "content": (
-                    "다음 전사를 5~7개의 핵심 bullet로 정리하고, 방송 주요 맥락을 한 문장으로 요약해 주세요. "
-                    "불필요한 인사말이나 반복은 제외하세요.\n\n전사 내용:\n" + transcript_text
-                ),
+                "content": user_prompt,
             },
         ],
     }
