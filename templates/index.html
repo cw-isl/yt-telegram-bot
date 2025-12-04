@@ -751,33 +751,89 @@
     });
   };
 
-  const showTaskProgress = (wrapper, bar) => {
-    if (!wrapper || !bar) return;
-    wrapper.classList.remove("d-none");
-    bar.classList.remove("bg-success", "bg-danger");
-    bar.style.width = "15%";
-    let current = 15;
-    const tick = () => {
-      current = Math.min(95, current + Math.random() * 18);
-      bar.style.width = `${current}%`;
-    };
-    return setInterval(tick, 500);
-  };
-
-  const finishTaskProgress = (timerId, wrapper, bar, ok) => {
-    if (timerId) clearInterval(timerId);
-    if (!wrapper || !bar) return;
-
-    bar.style.width = "100%";
-    bar.classList.toggle("bg-success", !!ok);
-    bar.classList.toggle("bg-danger", !ok);
-    setTimeout(() => wrapper.classList.add("d-none"), 1400);
-  };
+  const TASK_POLL_INTERVAL = 1500;
+  const TASK_STALE_THRESHOLD = 12000;
+  const ACTIVE_TASK_KEYS = { transcript: "activeTranscriptTask", summary: "activeSummaryTask" };
+  let transcriptPoller = null;
+  let summaryPoller = null;
 
   const setTaskStatus = (el, message, variant = "text-muted") => {
     if (!el) return;
     el.className = `form-text ${variant}`;
     el.textContent = message;
+  };
+
+  const renderTaskProgress = (wrapper, bar, progress, status) => {
+    if (!wrapper || !bar) return;
+    wrapper.classList.remove("d-none");
+    const percent = Math.max(5, Math.min(progress, 100));
+    bar.style.width = `${percent}%`;
+    bar.classList.remove("bg-success", "bg-danger");
+    if (status === "completed") bar.classList.add("bg-success");
+    if (status === "failed") bar.classList.add("bg-danger");
+  };
+
+  const startTaskWatcher = (taskId, kind, ui) => {
+    if (!taskId || !ui) return null;
+    const storageKey = ACTIVE_TASK_KEYS[kind];
+    if (!storageKey) return null;
+    sessionStorage.setItem(storageKey, taskId);
+
+    let lastUpdate = Date.now();
+    const poll = async () => {
+      try {
+        const response = await fetch(`/tasks/${taskId}`);
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.message || "작업 상태를 불러오지 못했습니다.");
+        }
+
+        const task = payload.task || {};
+        const progressValue = Math.round((task.progress || 0) * 100);
+        const status = task.status || "running";
+        const updatedAt = Date.parse(task.updated_at || "");
+        if (!Number.isNaN(updatedAt)) {
+          lastUpdate = updatedAt;
+        }
+
+        const stale = Date.now() - lastUpdate > TASK_STALE_THRESHOLD;
+        const baseMessage = task.message || "상태 확인 중...";
+        const message = stale
+          ? `${baseMessage} (서버 응답 대기 중...)`
+          : `${baseMessage} (${progressValue}%)`;
+        const variant = status === "failed" ? "text-danger" : status === "completed" ? "text-success" : "text-muted";
+
+        renderTaskProgress(ui.wrapper, ui.bar, progressValue, status);
+        ui.bar?.classList.toggle("progress-bar-striped", stale);
+        ui.bar?.classList.toggle("progress-bar-animated", stale);
+        setTaskStatus(ui.statusEl, message, variant);
+
+        if (status === "completed" || status === "failed") {
+          sessionStorage.removeItem(storageKey);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        sessionStorage.removeItem(storageKey);
+        setTaskStatus(ui.statusEl, error.message || "상태 확인 중 문제가 발생했습니다.", "text-danger");
+        return false;
+      }
+    };
+
+    const timerId = setInterval(async () => {
+      const shouldContinue = await poll();
+      if (!shouldContinue) {
+        clearInterval(timerId);
+      }
+    }, TASK_POLL_INTERVAL);
+
+    poll();
+    return timerId;
+  };
+
+  const stopWatcher = (timerId, storageKey) => {
+    if (timerId) clearInterval(timerId);
+    if (storageKey) sessionStorage.removeItem(storageKey);
   };
 
   const handleTranscriptSubmit = async (event) => {
@@ -788,8 +844,9 @@
       return;
     }
 
+    stopWatcher(transcriptPoller, ACTIVE_TASK_KEYS.transcript);
     setTaskStatus(transcriptStatus, "전사 작업을 시작합니다...", "text-muted");
-    const timer = showTaskProgress(transcriptProgress, transcriptProgressBar);
+    renderTaskProgress(transcriptProgress, transcriptProgressBar, 8, "running");
 
     try {
       const response = await fetch("{{ url_for('transcript_action') }}", {
@@ -799,15 +856,23 @@
       });
 
       const payload = await response.json().catch(() => ({}));
-      const ok = response.ok && payload.ok;
-      finishTaskProgress(timer, transcriptProgress, transcriptProgressBar, ok);
-      setTaskStatus(
-        transcriptStatus,
-        payload.message || (ok ? "전사가 완료되었습니다." : "전사 작업에 실패했습니다."),
-        ok ? "text-success" : "text-danger"
-      );
+      if (!response.ok || !payload.ok || !payload.task_id) {
+        renderTaskProgress(transcriptProgress, transcriptProgressBar, 100, "failed");
+        setTaskStatus(
+          transcriptStatus,
+          payload.message || "전사 작업을 시작하지 못했습니다.",
+          "text-danger"
+        );
+        return;
+      }
+
+      transcriptPoller = startTaskWatcher(payload.task_id, "transcript", {
+        wrapper: transcriptProgress,
+        bar: transcriptProgressBar,
+        statusEl: transcriptStatus,
+      });
     } catch (error) {
-      finishTaskProgress(timer, transcriptProgress, transcriptProgressBar, false);
+      renderTaskProgress(transcriptProgress, transcriptProgressBar, 100, "failed");
       setTaskStatus(transcriptStatus, "전사 요청 중 오류가 발생했습니다.", "text-danger");
     }
   };
@@ -820,8 +885,9 @@
       return;
     }
 
+    stopWatcher(summaryPoller, ACTIVE_TASK_KEYS.summary);
     setTaskStatus(summaryStatus, "요약을 준비합니다...", "text-muted");
-    const timer = showTaskProgress(summaryProgress, summaryProgressBar);
+    renderTaskProgress(summaryProgress, summaryProgressBar, 8, "running");
     const modelValue = summaryModelSelect?.value || "";
 
     try {
@@ -832,22 +898,48 @@
       });
 
       const payload = await response.json().catch(() => ({}));
-      const ok = response.ok && payload.ok;
-      finishTaskProgress(timer, summaryProgress, summaryProgressBar, ok);
-      setTaskStatus(
-        summaryStatus,
-        payload.message || (ok ? "요약을 완료했습니다." : "요약 작업에 실패했습니다."),
-        ok ? "text-success" : "text-danger"
-      );
+      if (!response.ok || !payload.ok || !payload.task_id) {
+        renderTaskProgress(summaryProgress, summaryProgressBar, 100, "failed");
+        setTaskStatus(summaryStatus, payload.message || "요약 작업을 시작하지 못했습니다.", "text-danger");
+        return;
+      }
+
+      summaryPoller = startTaskWatcher(payload.task_id, "summary", {
+        wrapper: summaryProgress,
+        bar: summaryProgressBar,
+        statusEl: summaryStatus,
+      });
     } catch (error) {
-      finishTaskProgress(timer, summaryProgress, summaryProgressBar, false);
+      renderTaskProgress(summaryProgress, summaryProgressBar, 100, "failed");
       setTaskStatus(summaryStatus, "요약 요청 중 오류가 발생했습니다.", "text-danger");
+    }
+  };
+
+  const resumeTaskProgress = () => {
+    const savedTranscriptTask = sessionStorage.getItem(ACTIVE_TASK_KEYS.transcript);
+    const savedSummaryTask = sessionStorage.getItem(ACTIVE_TASK_KEYS.summary);
+
+    if (savedTranscriptTask && !transcriptPoller) {
+      transcriptPoller = startTaskWatcher(savedTranscriptTask, "transcript", {
+        wrapper: transcriptProgress,
+        bar: transcriptProgressBar,
+        statusEl: transcriptStatus,
+      });
+    }
+
+    if (savedSummaryTask && !summaryPoller) {
+      summaryPoller = startTaskWatcher(savedSummaryTask, "summary", {
+        wrapper: summaryProgress,
+        bar: summaryProgressBar,
+        statusEl: summaryStatus,
+      });
     }
   };
 
   const setupTaskProgress = () => {
     transcriptFormEl?.addEventListener("submit", handleTranscriptSubmit);
     summaryFormEl?.addEventListener("submit", handleSummarySubmit);
+    resumeTaskProgress();
   };
 
   const renderSourceOptions = (selectEl, sources) => {
