@@ -16,6 +16,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from transcriber import WhisperOptions, transcribe_file
+from summarizer import SummaryResult, summarize_transcript
 from youtube_recorder_bot import (
     capture_live_frame,
     ffmpeg_path,
@@ -526,6 +527,8 @@ def summary_action():
 
     transcripts_dir = Path(paths.get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
     summaries_dir = Path(paths.get("summaries", "/root/rcbot/downloads/summaries")).expanduser()
+    auth = settings.get("auth", {})
+    api_key = (auth.get("chatgpt_token") or "").strip()
 
     def respond(message: str, ok: bool, status: int):
         if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
@@ -536,18 +539,36 @@ def summary_action():
     if not file_name:
         return respond("파일을 선택하세요.", False, 400)
 
+    if not api_key:
+        return respond("ChatGPT 토큰을 설정한 뒤 다시 시도하세요.", False, 400)
+
     source = _resolve_existing_file(file_name, transcripts_dir)
     if not source:
         return respond("전사 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
 
+    result: SummaryResult | None
+    error: str | None
+    result, error = summarize_transcript(source, api_key=api_key)
+    if error or not result:
+        return respond(error or "요약 생성에 실패했습니다.", False, 500)
+
     output_path = _unique_output_path(summaries_dir, Path(file_name).stem + "_summary", ".txt")
-    summary_body = (
-        f"전사 파일: {source.name}\n"
-        f"저장 위치: {source.parent}\n"
-        f"요약 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        "이 파일은 전사 내용을 기반으로 생성된 요약 결과 자리표시자입니다."
-    )
-    output_path.write_text(summary_body, encoding="utf-8")
+    header_lines = [
+        f"전사 파일: {source.name}",
+        f"저장 위치: {source.parent}",
+        f"요약 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"사용 모델: {result.model}",
+    ]
+
+    if result.truncated and result.max_characters:
+        header_lines.append(f"요약은 전사 상위 {result.max_characters}자를 기준으로 생성되었습니다.")
+
+    if result.prompt_tokens is not None or result.completion_tokens is not None:
+        header_lines.append(
+            f"토큰 사용량: prompt {result.prompt_tokens or 0}, completion {result.completion_tokens or 0}"
+        )
+
+    output_path.write_text("\n".join(header_lines) + "\n\n" + result.content.strip(), encoding="utf-8")
 
     return respond(f"요약 파일을 저장했습니다: {output_path.name}", True, 200)
 
