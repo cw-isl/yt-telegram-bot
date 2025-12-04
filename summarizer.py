@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -93,6 +93,7 @@ def summarize_transcript(
     model: str | None = None,
     max_chars: int | None = DEFAULT_SUMMARY_MAX_CHARS,
     api_base: str | None = DEFAULT_OPENAI_BASE_URL,
+    progress_callback: Callable[[float, str], None] | None = None,
 ) -> tuple[SummaryResult | None, str | None]:
     transcript_path = transcript_path.expanduser()
 
@@ -102,7 +103,12 @@ def summarize_transcript(
     if not transcript_path.exists() or not transcript_path.is_file():
         return None, "요약할 전사 파일을 찾을 수 없습니다."
 
+    if progress_callback:
+        progress_callback(0.05, "전사 파일을 읽는 중...")
+
     snippet, truncated = _prepare_transcript_text(transcript_path, max_chars=max_chars)
+    if progress_callback:
+        progress_callback(0.2, "요약 프롬프트를 준비하는 중...")
     target_model = model or DEFAULT_SUMMARY_MODEL
 
     url = (api_base.rstrip("/") if api_base else DEFAULT_OPENAI_BASE_URL.rstrip("/")) + "/chat/completions"
@@ -110,9 +116,13 @@ def summarize_transcript(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     try:
+        if progress_callback:
+            progress_callback(0.35, "OpenAI API로 요청을 전송했습니다. 응답을 기다리는 중...")
         response = requests.post(url, headers=headers, json=payload, timeout=120)
     except requests.RequestException as exc:  # noqa: BLE001 - surfaced to user
         logger.exception("OpenAI request failed")
+        if progress_callback:
+            progress_callback(0.0, "요약 요청 중 오류가 발생했습니다.")
         return None, f"요약 요청 중 오류가 발생했습니다: {exc}"
 
     if response.status_code >= 300:
@@ -121,6 +131,8 @@ def summarize_transcript(
         except Exception:  # noqa: BLE001 - safe fallback
             detail = response.text
         logger.error("OpenAI API error %s: %s", response.status_code, detail)
+        if progress_callback:
+            progress_callback(0.0, "요약 응답을 받지 못했습니다.")
         return None, detail or "요약 응답을 받지 못했습니다."
 
     try:
@@ -135,8 +147,16 @@ def summarize_transcript(
     except ValueError:
         return None, "요약 응답을 해석하지 못했습니다."
 
+    if progress_callback:
+        progress_callback(0.9, "요약 결과를 정리하는 중...")
+
     if not content:
+        if progress_callback:
+            progress_callback(0.0, "빈 요약 결과가 반환되었습니다.")
         return None, "빈 요약 결과가 반환되었습니다."
+
+    if progress_callback:
+        progress_callback(1.0, "요약을 완료했습니다.")
 
     return (
         SummaryResult(

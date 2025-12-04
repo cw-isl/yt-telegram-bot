@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import re
 import ssl
@@ -7,6 +8,7 @@ import subprocess
 import threading
 import uuid
 import signal
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +60,70 @@ _load_env_file()
 app = Flask(__name__)
 app.secret_key = "dev-secret"  # replace in production
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+
+@dataclass
+class TaskStatus:
+    id: str
+    kind: str
+    label: str
+    status: str = "pending"
+    progress: float = 0.0
+    message: str = "대기 중"
+    detail: str | None = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        data["created_at"] = self.created_at.isoformat() + "Z"
+        data["updated_at"] = self.updated_at.isoformat() + "Z"
+        return data
+
+
+class TaskRegistry:
+    def __init__(self) -> None:
+        self._tasks: dict[str, TaskStatus] = {}
+        self._lock = threading.Lock()
+
+    def create(self, kind: str, label: str, *, message: str = "대기 중") -> TaskStatus:
+        task = TaskStatus(id=uuid.uuid4().hex, kind=kind, label=label, message=message)
+        with self._lock:
+            self._tasks[task.id] = task
+        return copy.deepcopy(task)
+
+    def update(
+        self,
+        task_id: str,
+        *,
+        status: str | None = None,
+        progress: float | None = None,
+        message: str | None = None,
+        detail: str | None = None,
+    ) -> TaskStatus | None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+
+            if status:
+                task.status = status
+            if progress is not None:
+                task.progress = max(0.0, min(progress, 1.0))
+            if message:
+                task.message = message
+            if detail is not None:
+                task.detail = detail
+            task.updated_at = datetime.utcnow()
+            return copy.deepcopy(task)
+
+    def get(self, task_id: str) -> TaskStatus | None:
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return copy.deepcopy(task) if task else None
+
+
+tasks = TaskRegistry()
 
 
 class LiveRecorder:
@@ -495,9 +561,13 @@ def transcript_action():
     live_dir = Path(paths.get("recordings", "/root/rcbot/downloads/live")).expanduser()
     transcripts_dir = Path(paths.get("transcripts", "/root/rcbot/downloads/transcripts")).expanduser()
 
-    def respond(message: str, ok: bool, status: int):
+    def respond(message: str, ok: bool, status: int, extra: dict | None = None):
+        payload = {"ok": ok, "message": message, "file_name": file_name}
+        if extra:
+            payload.update(extra)
+
         if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
-            return jsonify({"ok": ok, "message": message, "file_name": file_name}), status
+            return jsonify(payload), status
         flash(message, "success" if ok else "warning")
         return redirect(url_for("index"))
 
@@ -511,12 +581,39 @@ def transcript_action():
 
         output_path = _unique_output_path(transcripts_dir, Path(file_name).stem, ".txt")
         options = WhisperOptions()
-        transcript_path, error = transcribe_file(source, output_path, options=options)
-        if error or not transcript_path:
-            return respond(error or "전사 작업에 실패했습니다.", False, 500)
+        task = tasks.create("transcript", file_name, message="전사 작업을 준비합니다...")
 
-        file_name = transcript_path.name
-        return respond(f"전사 파일을 저장했습니다: {file_name}", True, 200)
+        def _run_transcription(task_id: str) -> None:
+            try:
+                tasks.update(task_id, status="running", progress=0.05, message="전사 대상을 확인하는 중...")
+
+                def _progress_callback(progress: float, message: str) -> None:
+                    tasks.update(task_id, status="running", progress=progress, message=message)
+
+                transcript_path, error = transcribe_file(
+                    source, output_path, options=options, on_progress=_progress_callback
+                )
+                if error or not transcript_path:
+                    tasks.update(task_id, status="failed", message=error or "전사 작업에 실패했습니다.")
+                    return
+
+                tasks.update(
+                    task_id,
+                    status="completed",
+                    progress=1.0,
+                    message=f"전사 완료: {transcript_path.name}",
+                    detail=transcript_path.name,
+                )
+            except Exception as exc:  # noqa: BLE001 - surfaced to caller for debugging
+                app.logger.exception("Transcript worker failed for %s", file_name or "<missing>")
+                tasks.update(
+                    task_id,
+                    status="failed",
+                    message=f"전사 처리 중 서버 오류가 발생했습니다: {exc}",
+                )
+
+        threading.Thread(target=_run_transcription, args=(task.id,), daemon=True).start()
+        return respond("전사 작업을 시작했습니다. 진행률을 확인하세요.", True, 202, {"task_id": task.id})
     except Exception as exc:  # noqa: BLE001 - surfaced to caller for debugging
         app.logger.exception("Transcript request failed for %s", file_name or "<missing>")
         return respond(
@@ -543,9 +640,13 @@ def summary_action():
         else (available_models[0] if available_models else DEFAULT_SUMMARY_MODEL)
     )
 
-    def respond(message: str, ok: bool, status: int):
+    def respond(message: str, ok: bool, status: int, extra: dict | None = None):
+        payload = {"ok": ok, "message": message, "file_name": file_name}
+        if extra:
+            payload.update(extra)
+
         if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
-            return jsonify({"ok": ok, "message": message, "file_name": file_name}), status
+            return jsonify(payload), status
         flash(message, "success" if ok else "warning")
         return redirect(url_for("index"))
 
@@ -559,37 +660,69 @@ def summary_action():
     if not source:
         return respond("전사 파일을 찾을 수 없습니다. 목록을 새로고침 해주세요.", False, 404)
 
-    result: SummaryResult | None
-    error: str | None
-    result, error = summarize_transcript(source, api_key=api_key, model=selected_model)
-    if error or not result:
-        return respond(error or "요약 생성에 실패했습니다.", False, 500)
+    task = tasks.create("summary", file_name, message="요약 작업을 준비합니다...")
 
-    output_path = _unique_output_path(summaries_dir, Path(file_name).stem + "_summary", ".txt")
-    header_lines = [
-        f"전사 파일: {source.name}",
-        f"저장 위치: {source.parent}",
-        f"요약 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"사용 모델: {result.model}",
-    ]
+    def _run_summary(task_id: str) -> None:
+        try:
+            tasks.update(task_id, status="running", progress=0.05, message="전사 파일을 불러오는 중...")
 
-    if result.truncated and result.max_characters:
-        header_lines.append(f"요약은 전사 상위 {result.max_characters}자를 기준으로 생성되었습니다.")
+            def _progress_callback(progress: float, message: str) -> None:
+                tasks.update(task_id, status="running", progress=progress, message=message)
 
-    if result.prompt_tokens is not None or result.completion_tokens is not None:
-        header_lines.append(
-            f"토큰 사용량: prompt {result.prompt_tokens or 0}, completion {result.completion_tokens or 0}"
-        )
+            result: SummaryResult | None
+            error: str | None
+            result, error = summarize_transcript(
+                source, api_key=api_key, model=selected_model, progress_callback=_progress_callback
+            )
+            if error or not result:
+                tasks.update(task_id, status="failed", message=error or "요약 생성에 실패했습니다.")
+                return
 
-    output_path.write_text("\n".join(header_lines) + "\n\n" + result.content.strip(), encoding="utf-8")
+            output_path = _unique_output_path(summaries_dir, Path(file_name).stem + "_summary", ".txt")
+            header_lines = [
+                f"전사 파일: {source.name}",
+                f"저장 위치: {source.parent}",
+                f"요약 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"사용 모델: {result.model}",
+            ]
 
-    return respond(f"요약 파일을 저장했습니다: {output_path.name}", True, 200)
+            if result.truncated and result.max_characters:
+                header_lines.append(f"요약은 전사 상위 {result.max_characters}자를 기준으로 생성되었습니다.")
+
+            if result.prompt_tokens is not None or result.completion_tokens is not None:
+                header_lines.append(
+                    f"토큰 사용량: prompt {result.prompt_tokens or 0}, completion {result.completion_tokens or 0}"
+                )
+
+            output_path.write_text("\n".join(header_lines) + "\n\n" + result.content.strip(), encoding="utf-8")
+
+            tasks.update(
+                task_id,
+                status="completed",
+                progress=1.0,
+                message=f"요약 파일 저장 완료: {output_path.name}",
+                detail=output_path.name,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to caller for debugging
+            app.logger.exception("Summary worker failed for %s", file_name or "<missing>")
+            tasks.update(task_id, status="failed", message=f"요약 처리 중 오류가 발생했습니다: {exc}")
+
+    threading.Thread(target=_run_summary, args=(task.id,), daemon=True).start()
+    return respond("요약 작업을 시작했습니다. 진행률을 확인하세요.", True, 202, {"task_id": task.id})
 
 
 @app.route("/api/sources/transcript")
 def transcript_sources_api():
     settings = load_settings()
     return jsonify({"ok": True, "sources": _transcript_sources(settings)})
+
+
+@app.route("/tasks/<task_id>")
+def task_status(task_id: str):
+    task = tasks.get(task_id)
+    if not task:
+        return jsonify({"ok": False, "message": "작업을 찾을 수 없습니다."}), 404
+    return jsonify({"ok": True, "task": task.to_dict()})
 
 
 @app.route("/api/sources/summary")
