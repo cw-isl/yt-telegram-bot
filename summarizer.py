@@ -15,6 +15,36 @@ DEFAULT_SUMMARY_MAX_CHARS = int(os.getenv("SUMMARY_MAX_CHARS", "12000"))
 DEFAULT_OPENAI_BASE_URL = os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
 
 
+def _parse_models(value: str | None) -> list[str]:
+    if not value:
+        return []
+    models = [item.strip() for item in value.split(",") if item.strip()]
+    # Preserve order while removing duplicates
+    seen = set()
+    unique_models: list[str] = []
+    for model in models:
+        if model not in seen:
+            seen.add(model)
+            unique_models.append(model)
+    return unique_models
+
+
+def available_summary_models() -> list[str]:
+    env_models = _parse_models(os.getenv("SUMMARY_MODELS"))
+    if env_models:
+        return env_models
+
+    fallback = [DEFAULT_SUMMARY_MODEL, "gpt-4o", "o1-mini"]
+    # Remove duplicates while keeping order
+    seen = set()
+    unique_fallback: list[str] = []
+    for model in fallback:
+        if model not in seen:
+            seen.add(model)
+            unique_fallback.append(model)
+    return unique_fallback
+
+
 @dataclass
 class SummaryResult:
     content: str

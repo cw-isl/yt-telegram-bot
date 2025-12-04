@@ -16,7 +16,12 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from transcriber import WhisperOptions, transcribe_file
-from summarizer import SummaryResult, summarize_transcript
+from summarizer import (
+    DEFAULT_SUMMARY_MODEL,
+    SummaryResult,
+    available_summary_models,
+    summarize_transcript,
+)
 from youtube_recorder_bot import (
     capture_live_frame,
     ffmpeg_path,
@@ -352,6 +357,7 @@ def index():
         manual_default_remote=DEFAULT_MANUAL_REMOTE_PATH,
         transcript_sources=_transcript_sources(settings),
         summary_sources=_summary_sources(settings),
+        summary_models=available_summary_models(),
         jobs=jobs,
         https_state=_https_status(),
     )
@@ -522,6 +528,7 @@ def transcript_action():
 def summary_action():
     payload = request.get_json(silent=True) or {}
     file_name = (payload.get("file_name") or request.form.get("file_name") or "").strip()
+    requested_model = (payload.get("model") or request.form.get("model") or "").strip()
     settings = load_settings()
     paths = settings.get("paths", {})
 
@@ -529,6 +536,12 @@ def summary_action():
     summaries_dir = Path(paths.get("summaries", "/root/rcbot/downloads/summaries")).expanduser()
     auth = settings.get("auth", {})
     api_key = (auth.get("chatgpt_token") or "").strip()
+    available_models = available_summary_models()
+    selected_model = (
+        requested_model
+        if requested_model and requested_model in available_models
+        else (available_models[0] if available_models else DEFAULT_SUMMARY_MODEL)
+    )
 
     def respond(message: str, ok: bool, status: int):
         if request.is_json or request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]:
@@ -548,7 +561,7 @@ def summary_action():
 
     result: SummaryResult | None
     error: str | None
-    result, error = summarize_transcript(source, api_key=api_key)
+    result, error = summarize_transcript(source, api_key=api_key, model=selected_model)
     if error or not result:
         return respond(error or "요약 생성에 실패했습니다.", False, 500)
 

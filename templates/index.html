@@ -118,8 +118,8 @@
           <div class="col-auto">
             <button type="button" class="btn btn-outline-secondary btn-sm" id="summary-refresh">업데이트</button>
           </div>
-          <div class="col-md-7">
-            <select class="form-select" name="file_name" id="summary-file">
+          <div class="col-md-6">
+            <select class="form-select" name="file_name" id="summary-file" aria-label="요약할 전사 파일">
               {% for cat in summary_sources %}
               <optgroup label="{{ cat.name }}">
                 {% if cat.files %}
@@ -133,7 +133,14 @@
               {% endfor %}
             </select>
           </div>
-          <div class="col-md-4 d-grid">
+          <div class="col-md-3">
+            <select class="form-select" name="model" id="summary-model" aria-label="요약 생성 모델">
+              {% for model in summary_models %}
+              <option value="{{ model }}" {% if loop.first %}selected{% endif %}>{{ model }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3 d-grid">
             <button class="btn btn-success">요약 시작</button>
           </div>
         </div>
@@ -707,6 +714,7 @@
   const summaryProgressBar = document.getElementById("summary-progress-bar");
   const transcriptSelect = document.getElementById("transcript-file");
   const summarySelect = document.getElementById("summary-file");
+  const summaryModelSelect = document.getElementById("summary-model");
   const transcriptRefreshButton = document.getElementById("transcript-refresh");
   const summaryRefreshButton = document.getElementById("summary-refresh");
   const transcriptStatus = document.getElementById("transcript-status");
@@ -814,12 +822,13 @@
 
     setTaskStatus(summaryStatus, "요약을 준비합니다...", "text-muted");
     const timer = showTaskProgress(summaryProgress, summaryProgressBar);
+    const modelValue = summaryModelSelect?.value || "";
 
     try {
       const response = await fetch("{{ url_for('summary_action') }}", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ file_name: summarySelect.value }),
+        body: JSON.stringify({ file_name: summarySelect.value, model: modelValue }),
       });
 
       const payload = await response.json().catch(() => ({}));
